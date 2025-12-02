@@ -1,0 +1,9 @@
+{
+  "version": "2025-12-02-initial",
+  "timestamp": 1733140800000,
+  "hash": "initial",
+  "files": {
+    "experiment-runner.js": "pending",
+    "worker-runner.js": "pending"
+  }
+}
