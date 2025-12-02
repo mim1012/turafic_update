@@ -1,33 +1,57 @@
 @echo off
-chcp 65001 >nul
+
 echo.
-echo   TURAFIC Auto-Updater 설치
-echo   ==========================
+echo   ========================================
+echo   TURAFIC Auto-Updater Install
+echo   ========================================
 echo.
 
-:: .env 파일 확인
+:: .env file check
 if not exist ".env" (
-    echo [1/2] .env 파일 생성 중...
+    echo [1/3] Creating .env file...
     copy .env.example .env >nul
-    echo   완료! .env 파일이 생성되었습니다.
+    echo   Done: .env file created
     echo.
-    echo   [중요] .env 파일을 수정해야 합니다:
-    echo      - NODE_TYPE: experiment 또는 worker
-    echo      - NODE_ID: 이 PC의 고유 이름
-    echo      - DATABASE_URL: Supabase 연결 문자열
+    echo   IMPORTANT: Edit .env file:
+    echo      - NODE_TYPE: experiment or worker
+    echo      - NODE_ID: unique PC name
+    echo      - DATABASE_URL: Supabase connection string
     echo.
-    echo   메모장으로 .env 파일을 엽니다...
-    timeout /t 2 >nul
-    notepad .env
 ) else (
-    echo [1/2] .env 파일 이미 존재함
+    echo [1/3] .env file already exists
 )
 
+echo [2/3] Installing dependencies...
+call npm install
+if %errorlevel% neq 0 (
+    echo   ERROR: npm install failed!
+    goto :fail
+)
+echo   Done: dependencies installed
 echo.
-echo [2/2] 설치 완료!
+
+echo [3/3] Building EXE...
+call npx esbuild auto-updater.ts --bundle --platform=node --target=node18 --outfile=auto-updater.js
+if %errorlevel% neq 0 goto :fail
+
+call npx pkg auto-updater.js -t node18-win-x64 -o turafic-updater.exe
+if %errorlevel% neq 0 goto :fail
+echo   Done: turafic-updater.exe created
 echo.
-echo   실행방법: turafic-updater.exe 더블클릭
+
+echo   ========================================
+echo   Installation Complete!
+echo   ========================================
 echo.
-echo   (Node.js 설치 불필요 - exe에 모두 포함됨)
+echo   1. Edit .env file if needed
+echo   2. Run turafic-updater.exe
 echo.
+goto :end
+
+:fail
+echo.
+echo   ERROR: Installation failed!
+echo.
+
+:end
 pause
