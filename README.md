@@ -1,32 +1,45 @@
-# TURAFIC Deploy 폴더
+# TURAFIC Auto-Updater
 
-이 폴더의 파일들은 GitHub에 푸시되어 원격 PC들이 자동으로 다운로드합니다.
+1000대 PC 자동 업데이트 시스템
 
-## 파일 목록
+## 원격 PC 설치 방법
 
-| 파일 | 설명 |
-|------|------|
-| `experiment-runner.js` | 실험 PC용 Runner (빌드된 JS) |
-| `worker-runner.js` | 작업 PC용 Runner (빌드된 JS) |
-| `version.json` | 버전 정보 (타임스탬프로 업데이트 감지) |
-
-## 사용법
-
-1. `tools/1클릭_배포완료.bat` 실행
-2. 자동으로 빌드 → version.json 갱신 → GitHub 푸시
-3. 원격 PC들이 3분 이내 자동 업데이트
-
-## 직접 빌드하기
-
-```bash
-# experiment-runner 빌드
-npx esbuild scripts/distributed/experiment-runner.ts --bundle --platform=node --outfile=deploy/experiment-runner.js
-
-# worker-runner 빌드
-npx esbuild scripts/distributed/worker-runner.ts --bundle --platform=node --outfile=deploy/worker-runner.js
+### 1. Git Clone
+```cmd
+cd C:\
+git clone https://github.com/mim1012/turafic_update.git turafic-runner
+cd turafic-runner
 ```
 
-## 주의사항
+### 2. 설치 실행
+```cmd
+install.bat
+```
 
-- 이 폴더는 별도의 Git 레포(`mim1012/turafic-update`)로 관리됩니다
-- 메인 프로젝트와 분리되어 있어 원격 PC에서 안전하게 다운로드 가능
+### 3. .env 설정
+`.env` 파일을 열고 수정:
+```env
+NODE_TYPE=worker          # experiment 또는 worker
+NODE_ID=worker-pc-001     # 이 PC의 고유 이름
+DATABASE_URL=postgresql://postgres:비밀번호@db.프로젝트.supabase.co:5432/postgres
+```
+
+### 4. 실행
+```cmd
+turafic-updater.exe
+```
+
+## 자동 시작 설정 (선택)
+
+### Windows 작업 스케줄러
+1. `Win + R` → `taskschd.msc`
+2. 작업 만들기 → 트리거: 시작 시
+3. 동작: `C:\turafic-runner\turafic-updater.exe`
+
+### 시작 프로그램
+1. `Win + R` → `shell:startup`
+2. `turafic-updater.exe` 바로가기 만들기
+
+## 업데이트 주기
+- 3분마다 GitHub에서 버전 확인
+- 변경 감지 시 자동 다운로드 및 재시작

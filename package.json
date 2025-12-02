@@ -1,0 +1,29 @@
+{
+  "name": "turafic-auto-updater",
+  "version": "1.0.0",
+  "description": "TURAFIC 자동 업데이트 시스템 - 1000대 PC에 한 번만 배포",
+  "main": "auto-updater.js",
+  "bin": "auto-updater.js",
+  "scripts": {
+    "build": "esbuild auto-updater.ts --bundle --platform=node --target=node18 --outfile=auto-updater.js",
+    "build:exe": "npm run build && pkg auto-updater.js -t node18-win-x64 -o turafic-updater.exe",
+    "start": "node auto-updater.js",
+    "dev": "tsx auto-updater.ts"
+  },
+  "pkg": {
+    "scripts": "auto-updater.js",
+    "targets": ["node18-win-x64"],
+    "outputPath": "dist",
+    "assets": []
+  },
+  "dependencies": {
+    "dotenv": "^16.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.19.0",
+    "pkg": "^5.8.1",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}
