@@ -158,9 +158,18 @@ class AutoUpdater {
    * Runner 시작
    */
   private async startRunner(): Promise<void> {
-    const runnerFile = this.config.nodeType === 'experiment'
-      ? 'experiment-runner.js'
-      : 'worker-runner.js';
+    let runnerFile: string;
+    let useNpxTsx = false;
+
+    // nodeType에 따라 실행할 파일 결정
+    if (this.config.nodeType === 'playwright') {
+      runnerFile = 'parallel-ip-rotation-playwright.ts';
+      useNpxTsx = true;  // TypeScript 파일은 npx tsx로 실행
+    } else if (this.config.nodeType === 'experiment') {
+      runnerFile = 'experiment-runner.js';
+    } else {
+      runnerFile = 'worker-runner.js';
+    }
 
     const runnerPath = path.join(this.config.localDir, runnerFile);
 
@@ -177,7 +186,8 @@ class AutoUpdater {
 
     console.log(`\n[Updater] 🏃 Runner 시작: ${runnerFile}`);
     console.log(`  Node Type: ${this.config.nodeType}`);
-    console.log(`  Node ID: ${this.config.nodeId}\n`);
+    console.log(`  Node ID: ${this.config.nodeId}`);
+    console.log(`  Executor: ${useNpxTsx ? 'npx tsx' : 'node'}\n`);
 
     // 환경변수 전달
     const env = {
@@ -188,12 +198,21 @@ class AutoUpdater {
       SERVER_URL: this.config.serverUrl || '',
     };
 
-    // Node.js로 Runner 실행
-    this.runnerProcess = spawn('node', [runnerPath], {
-      cwd: this.config.localDir,
-      env,
-      stdio: 'inherit', // 콘솔 출력 연결
-    });
+    // Playwright (TypeScript)는 npx tsx로 실행, 나머지는 node로 실행
+    if (useNpxTsx) {
+      this.runnerProcess = spawn('npx', ['tsx', runnerPath], {
+        cwd: this.config.localDir,
+        env,
+        stdio: 'inherit',
+        shell: true,
+      });
+    } else {
+      this.runnerProcess = spawn('node', [runnerPath], {
+        cwd: this.config.localDir,
+        env,
+        stdio: 'inherit',
+      });
+    }
 
     this.runnerProcess.on('exit', (code) => {
       console.log(`[Updater] Runner 종료 (code: ${code})`);

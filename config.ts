@@ -7,7 +7,7 @@ import * as os from 'os';
 import * as fs from 'fs';
 import * as path from 'path';
 
-export type NodeType = 'experiment' | 'worker';
+export type NodeType = 'experiment' | 'worker' | 'playwright';
 
 export interface UpdaterConfig {
   // 노드 정보
@@ -33,7 +33,7 @@ const DEFAULT_CONFIG: Partial<UpdaterConfig> = {
   githubRawBase: 'https://raw.githubusercontent.com/mim1012/turafic_update/main',
   checkIntervalMs: 3 * 60 * 1000, // 3분
   localDir: 'C:\\turafic-runner',
-  files: ['experiment-runner.js', 'worker-runner.js', 'version.json'],
+  files: ['experiment-runner.js', 'worker-runner.js', 'parallel-ip-rotation-playwright.ts', 'playwright-save-login.ts', 'playwright-real-traffic.ts', 'version.json'],
 };
 
 /**
@@ -82,7 +82,7 @@ export function loadConfig(): UpdaterConfig {
  */
 export function createSampleConfig(targetDir: string): void {
   const sampleConfig = {
-    nodeType: 'worker',
+    nodeType: 'playwright',  // 'worker' | 'experiment' | 'playwright'
     nodeId: 'worker-pc-001',
     databaseUrl: 'postgresql://postgres:YOUR_PASSWORD@db.YOUR_PROJECT.supabase.co:5432/postgres',
     serverUrl: 'http://admin-pc:5000',
