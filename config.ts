@@ -32,7 +32,7 @@ export interface UpdaterConfig {
 const DEFAULT_CONFIG: Partial<UpdaterConfig> = {
   githubRawBase: 'https://raw.githubusercontent.com/mim1012/turafic_update/main',
   checkIntervalMs: 3 * 60 * 1000, // 3분
-  localDir: 'C:\\turafic-runner',
+  localDir: 'C:\\turafic',
   files: ['experiment-runner.js', 'worker-runner.js', 'parallel-ip-rotation-playwright.ts', 'playwright-save-login.ts', 'playwright-real-traffic.ts', 'version.json'],
 };
 
@@ -88,7 +88,7 @@ export function createSampleConfig(targetDir: string): void {
     serverUrl: 'http://admin-pc:5000',
     githubRawBase: DEFAULT_CONFIG.githubRawBase,
     checkIntervalMs: DEFAULT_CONFIG.checkIntervalMs,
-    localDir: DEFAULT_CONFIG.localDir,
+    localDir: 'C:\\turafic',
     files: DEFAULT_CONFIG.files,
   };
 
