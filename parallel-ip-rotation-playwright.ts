@@ -28,7 +28,7 @@ import {
   getCurrentIP,
   getTetheringAdapter,
   rotateIP,
-} from "../../server/services/traffic/ipRotation";
+} from "./ipRotation";
 
 // ============ 설정 ============
 const NODE_ID = process.env.NODE_ID || `parallel-${os.hostname()}`;
