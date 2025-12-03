@@ -17,7 +17,10 @@
     "assets": []
   },
   "dependencies": {
-    "dotenv": "^16.0.0"
+    "dotenv": "^16.0.0",
+    "playwright": "^1.57.0",
+    "@supabase/supabase-js": "^2.49.0",
+    "@anthropic-ai/sdk": "^0.52.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
