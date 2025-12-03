@@ -109,14 +109,44 @@ function printStats() {
 }
 
 // ============ DB 함수 ============
+
+// 네이버쇼핑 슬롯의 일일 클릭 목표 가져오기
+async function getClicksPerDay(): Promise<number> {
+  const { data } = await supabase
+    .from("traffic_clicks_per_day")
+    .select("click_per_day")
+    .eq("slot_type", "네이버쇼핑")
+    .single();
+
+  return data?.click_per_day || 100; // 기본값 100
+}
+
+// 슬롯이 완료되었는지 확인 (success_count + fail_count >= click_per_day)
+async function isSlotCompleted(slotId: number, clicksPerDay: number): Promise<boolean> {
+  const { data } = await supabase
+    .from("slot_naver")
+    .select("success_count, fail_count")
+    .eq("id", slotId)
+    .single();
+
+  if (!data) return false;
+
+  const totalCount = (data.success_count || 0) + (data.fail_count || 0);
+  return totalCount >= clicksPerDay;
+}
+
 async function getNextTasks(count: number): Promise<TrafficTask[]> {
   const validTasks: TrafficTask[] = [];
+
+  // 일일 클릭 목표 가져오기
+  const clicksPerDay = await getClicksPerDay();
+  log(`Daily click target: ${clicksPerDay}`);
 
   const { data: tasks, error } = await supabase
     .from("traffic_navershopping")
     .select("*")
     .order("id", { ascending: true })
-    .limit(count * 2);
+    .limit(count * 3); // 완료된 슬롯 스킵 고려해서 더 많이 가져옴
 
   if (error || !tasks) return [];
 
@@ -124,6 +154,14 @@ async function getNextTasks(count: number): Promise<TrafficTask[]> {
     if (validTasks.length >= count) break;
 
     if (!task.slot_id) {
+      await deleteProcessedTraffic(task.id);
+      continue;
+    }
+
+    // 슬롯이 이미 완료되었는지 확인
+    const completed = await isSlotCompleted(task.slot_id, clicksPerDay);
+    if (completed) {
+      log(`Slot #${task.slot_id} completed (>= ${clicksPerDay} clicks). Removing task.`);
       await deleteProcessedTraffic(task.id);
       continue;
     }
