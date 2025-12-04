@@ -476,9 +476,17 @@ function getConfigWithEnvOverride() {
     taskRestSec: process.env.TASK_REST ? parseInt(process.env.TASK_REST) : autoConfig2.taskRestSec
   };
 }
-var __filename = (0, import_url.fileURLToPath)(import_meta.url);
-var isMainModule = process.argv[1] && import_path.default.resolve(process.argv[1]) === import_path.default.resolve(__filename);
-if (isMainModule) {
+function isMainModule() {
+  try {
+    if (typeof import_meta !== "undefined" && import_meta.url) {
+      const __filename = (0, import_url.fileURLToPath)(import_meta.url);
+      return process.argv[1] && import_path.default.resolve(process.argv[1]) === import_path.default.resolve(__filename);
+    }
+  } catch {
+  }
+  return false;
+}
+if (isMainModule()) {
   console.log("");
   printSystemInfo();
   console.log("");
@@ -663,9 +671,9 @@ var ReceiptCaptchaSolver = class {
       const imageElement = await page.$(selector);
       if (imageElement) {
         try {
-          const buffer2 = await imageElement.screenshot({ encoding: "base64" });
+          const buffer2 = await imageElement.screenshot();
           console.log(`[CaptchaSolver] \uC774\uBBF8\uC9C0 \uCEA1\uCC98 \uC131\uACF5: ${selector}`);
-          return buffer2;
+          return buffer2.toString("base64");
         } catch {
           continue;
         }
@@ -681,17 +689,17 @@ var ReceiptCaptchaSolver = class {
       const area = await page.$(selector);
       if (area) {
         try {
-          const buffer2 = await area.screenshot({ encoding: "base64" });
+          const buffer2 = await area.screenshot();
           console.log(`[CaptchaSolver] \uC601\uC5ED \uCEA1\uCC98 \uC131\uACF5: ${selector}`);
-          return buffer2;
+          return buffer2.toString("base64");
         } catch {
           continue;
         }
       }
     }
     console.log("[CaptchaSolver] \uC804\uCCB4 \uD398\uC774\uC9C0 \uCEA1\uCC98");
-    const buffer = await page.screenshot({ encoding: "base64" });
-    return buffer;
+    const buffer = await page.screenshot();
+    return buffer.toString("base64");
   }
   /**
    * Claude Vision API로 답 추출
@@ -754,6 +762,28 @@ var ReceiptCaptchaSolver = class {
     throw new Error("Failed to get text response from Claude");
   }
   /**
+   * 랜덤 딜레이 (사람처럼)
+   */
+  randomDelay(min, max) {
+    const ms = Math.floor(Math.random() * (max - min + 1)) + min;
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+  /**
+   * 사람처럼 타이핑 (개별 키 이벤트 + 랜덤 딜레이)
+   */
+  async humanType(page, selector, text) {
+    const input = await page.$(selector);
+    if (!input)
+      throw new Error(`Input not found: ${selector}`);
+    await input.click();
+    await this.randomDelay(100, 300);
+    for (const char of text) {
+      await page.keyboard.type(char);
+      await this.randomDelay(50, 180);
+    }
+    await this.randomDelay(200, 500);
+  }
+  /**
    * 답 입력 및 제출
    */
   async submitAnswer(page, answer) {
@@ -770,12 +800,16 @@ var ReceiptCaptchaSolver = class {
     for (const selector of inputSelectors) {
       try {
         await page.waitForSelector(selector, { timeout: 2e3 });
-        await page.evaluate((sel) => {
-          const input = document.querySelector(sel);
-          if (input)
-            input.value = "";
-        }, selector);
-        await page.type(selector, answer, { delay: 80 });
+        const input = await page.$(selector);
+        if (input) {
+          await input.click();
+          await this.randomDelay(50, 150);
+          await page.keyboard.press("Control+A");
+          await this.randomDelay(30, 80);
+          await page.keyboard.press("Backspace");
+          await this.randomDelay(100, 200);
+        }
+        await this.humanType(page, selector, answer);
         inputFound = true;
         console.log(`[CaptchaSolver] \uB2F5 \uC785\uB825 \uC644\uB8CC: ${selector}`);
         break;
@@ -786,7 +820,7 @@ var ReceiptCaptchaSolver = class {
     if (!inputFound) {
       throw new Error("CAPTCHA input field not found");
     }
-    await this.delay(500);
+    await this.randomDelay(300, 700);
     const buttonSelectors = [
       'button:has-text("\uD655\uC778")',
       'input[type="submit"]',
@@ -800,6 +834,8 @@ var ReceiptCaptchaSolver = class {
       try {
         const button = await page.$(selector);
         if (button) {
+          await button.hover();
+          await this.randomDelay(100, 300);
           await button.click();
           console.log(`[CaptchaSolver] \uD655\uC778 \uBC84\uD2BC \uD074\uB9AD: ${selector}`);
           break;

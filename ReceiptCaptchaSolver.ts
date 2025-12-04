@@ -254,9 +254,10 @@ export class ReceiptCaptchaSolver {
       const imageElement = await page.$(selector);
       if (imageElement) {
         try {
-          const buffer = await imageElement.screenshot({ encoding: "base64" });
+          // Playwright는 Buffer를 반환하므로 toString('base64')로 변환
+          const buffer = await imageElement.screenshot();
           console.log(`[CaptchaSolver] 이미지 캡처 성공: ${selector}`);
-          return buffer as string;
+          return buffer.toString('base64');
         } catch {
           continue;
         }
@@ -275,9 +276,9 @@ export class ReceiptCaptchaSolver {
       const area = await page.$(selector);
       if (area) {
         try {
-          const buffer = await area.screenshot({ encoding: "base64" });
+          const buffer = await area.screenshot();
           console.log(`[CaptchaSolver] 영역 캡처 성공: ${selector}`);
-          return buffer as string;
+          return buffer.toString('base64');
         } catch {
           continue;
         }
@@ -286,8 +287,8 @@ export class ReceiptCaptchaSolver {
 
     // fallback: 전체 페이지 스크린샷
     console.log("[CaptchaSolver] 전체 페이지 캡처");
-    const buffer = await page.screenshot({ encoding: "base64" });
-    return buffer as string;
+    const buffer = await page.screenshot();
+    return buffer.toString('base64');
   }
 
   /**
@@ -369,6 +370,35 @@ export class ReceiptCaptchaSolver {
   }
 
   /**
+   * 랜덤 딜레이 (사람처럼)
+   */
+  private randomDelay(min: number, max: number): Promise<void> {
+    const ms = Math.floor(Math.random() * (max - min + 1)) + min;
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * 사람처럼 타이핑 (개별 키 이벤트 + 랜덤 딜레이)
+   */
+  private async humanType(page: Page, selector: string, text: string): Promise<void> {
+    const input = await page.$(selector);
+    if (!input) throw new Error(`Input not found: ${selector}`);
+
+    // 1. 입력창 클릭 (포커스)
+    await input.click();
+    await this.randomDelay(100, 300);
+
+    // 2. 한 글자씩 타이핑 (랜덤 딜레이)
+    for (const char of text) {
+      await page.keyboard.type(char);
+      await this.randomDelay(50, 180);  // 50-180ms 랜덤
+    }
+
+    // 3. 타이핑 후 잠시 대기 (사람이 확인하는 시간)
+    await this.randomDelay(200, 500);
+  }
+
+  /**
    * 답 입력 및 제출
    */
   private async submitAnswer(page: Page, answer: string): Promise<void> {
@@ -388,14 +418,19 @@ export class ReceiptCaptchaSolver {
       try {
         await page.waitForSelector(selector, { timeout: 2000 });
 
-        // 기존 값 지우기
-        await page.evaluate((sel) => {
-          const input = document.querySelector(sel) as HTMLInputElement;
-          if (input) input.value = "";
-        }, selector);
+        // 기존 값 지우기 (Ctrl+A → Delete 사람처럼)
+        const input = await page.$(selector);
+        if (input) {
+          await input.click();
+          await this.randomDelay(50, 150);
+          await page.keyboard.press('Control+A');
+          await this.randomDelay(30, 80);
+          await page.keyboard.press('Backspace');
+          await this.randomDelay(100, 200);
+        }
 
-        // 답 입력
-        await page.type(selector, answer, { delay: 80 });
+        // 답 입력 (사람처럼)
+        await this.humanType(page, selector, answer);
         inputFound = true;
         console.log(`[CaptchaSolver] 답 입력 완료: ${selector}`);
         break;
@@ -408,7 +443,7 @@ export class ReceiptCaptchaSolver {
       throw new Error("CAPTCHA input field not found");
     }
 
-    await this.delay(500);
+    await this.randomDelay(300, 700);
 
     // 확인 버튼 클릭
     const buttonSelectors = [
@@ -425,6 +460,9 @@ export class ReceiptCaptchaSolver {
       try {
         const button = await page.$(selector);
         if (button) {
+          // 버튼 위로 마우스 이동 후 잠시 대기
+          await button.hover();
+          await this.randomDelay(100, 300);
           await button.click();
           console.log(`[CaptchaSolver] 확인 버튼 클릭: ${selector}`);
           break;
