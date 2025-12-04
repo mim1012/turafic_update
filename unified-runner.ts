@@ -124,13 +124,12 @@ async function registerWorker(): Promise<void> {
   const { error } = await supabaseControl
     .from("workerNodes")
     .upsert({
-      node_id: NODE_ID,
-      name: NODE_ID,
+      nodeId: NODE_ID,
+      nodeType: "worker",
       status: "online",
-      last_heartbeat: new Date().toISOString(),
-      current_version: VERSION,
-      registered_at: new Date().toISOString(),
-    }, { onConflict: "node_id" });
+      lastHeartbeat: new Date().toISOString(),
+      hostname: os.hostname(),
+    }, { onConflict: "nodeId" });
 
   if (error) {
     log(`Worker registration failed: ${error.message}`, "error");
@@ -144,9 +143,9 @@ async function updateHeartbeat(): Promise<void> {
     .from("workerNodes")
     .update({
       status: "online",
-      last_heartbeat: new Date().toISOString(),
+      lastHeartbeat: new Date().toISOString(),
     })
-    .eq("node_id", NODE_ID);
+    .eq("nodeId", NODE_ID);
 
   if (error) {
     log(`Heartbeat failed: ${error.message}`, "warn");
@@ -171,7 +170,7 @@ async function setWorkerOffline(): Promise<void> {
   await supabaseControl
     .from("workerNodes")
     .update({ status: "offline" })
-    .eq("node_id", NODE_ID);
+    .eq("nodeId", NODE_ID);
   log("Worker set to offline");
 }
 
@@ -193,9 +192,10 @@ async function fetchEnabledModes(): Promise<TrafficMode[]> {
 // ============ 상품 목록 가져오기 ============
 async function fetchProducts(): Promise<Product[]> {
   const { data, error } = await supabaseProduction
-    .from("traffic_navershopping")
+    .from("slot_naver")
     .select("id, keyword, link_url, mid, product_name")
     .not("mid", "is", null)
+    .eq("status", "active")
     .limit(100);
 
   if (error) {

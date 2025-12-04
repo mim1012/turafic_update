@@ -1,10 +1,11 @@
 {
-  "version": "2025-12-05-002000",
-  "timestamp": 1764869200000,
-  "hash": "fix-shebang-pkg-compat",
+  "version": "2025-12-05-003000",
+  "timestamp": 1764872600000,
+  "hash": "fix-db-schema-slot-naver",
   "features": [
     "auto-optimizer",
     "captcha-solver",
-    "pkg-compatible"
+    "pkg-compatible",
+    "slot-naver-table"
   ]
 }

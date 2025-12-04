@@ -1,3 +1,4 @@
+"use strict";
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -476,9 +477,8 @@ function getConfigWithEnvOverride() {
 // ReceiptCaptchaSolver.ts
 var import_sdk = __toESM(require("@anthropic-ai/sdk"));
 var ReceiptCaptchaSolver = class {
-  anthropic;
-  maxRetries = 2;
   constructor() {
+    this.maxRetries = 2;
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
       console.warn(
@@ -891,13 +891,12 @@ function sleep(ms) {
 }
 async function registerWorker() {
   const { error } = await supabaseControl.from("workerNodes").upsert({
-    node_id: NODE_ID,
-    name: NODE_ID,
+    nodeId: NODE_ID,
+    nodeType: "worker",
     status: "online",
-    last_heartbeat: (/* @__PURE__ */ new Date()).toISOString(),
-    current_version: VERSION,
-    registered_at: (/* @__PURE__ */ new Date()).toISOString()
-  }, { onConflict: "node_id" });
+    lastHeartbeat: (/* @__PURE__ */ new Date()).toISOString(),
+    hostname: import_os2.default.hostname()
+  }, { onConflict: "nodeId" });
   if (error) {
     log(`Worker registration failed: ${error.message}`, "error");
   } else {
@@ -907,8 +906,8 @@ async function registerWorker() {
 async function updateHeartbeat() {
   const { error } = await supabaseControl.from("workerNodes").update({
     status: "online",
-    last_heartbeat: (/* @__PURE__ */ new Date()).toISOString()
-  }).eq("node_id", NODE_ID);
+    lastHeartbeat: (/* @__PURE__ */ new Date()).toISOString()
+  }).eq("nodeId", NODE_ID);
   if (error) {
     log(`Heartbeat failed: ${error.message}`, "warn");
   }
@@ -926,7 +925,7 @@ function stopHeartbeat() {
   }
 }
 async function setWorkerOffline() {
-  await supabaseControl.from("workerNodes").update({ status: "offline" }).eq("node_id", NODE_ID);
+  await supabaseControl.from("workerNodes").update({ status: "offline" }).eq("nodeId", NODE_ID);
   log("Worker set to offline");
 }
 async function fetchEnabledModes() {
@@ -938,7 +937,7 @@ async function fetchEnabledModes() {
   return data || [];
 }
 async function fetchProducts() {
-  const { data, error } = await supabaseProduction.from("traffic_navershopping").select("id, keyword, link_url, mid, product_name").not("mid", "is", null).limit(100);
+  const { data, error } = await supabaseProduction.from("slot_naver").select("id, keyword, link_url, mid, product_name").not("mid", "is", null).eq("status", "active").limit(100);
   if (error) {
     log(`Failed to fetch products: ${error.message}`, "error");
     return [];
