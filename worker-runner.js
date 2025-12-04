@@ -511,6 +511,25 @@ var ReceiptCaptchaSolver = class {
       console.log("[CaptchaSolver] API key not configured, skipping");
       return false;
     }
+    const hasSecurityPage = await page.evaluate(() => {
+      const bodyText = document.body.innerText || "";
+      return bodyText.includes("\uBCF4\uC548 \uD655\uC778") || bodyText.includes("\uC601\uC218\uC99D");
+    });
+    if (hasSecurityPage) {
+      console.log("[CaptchaSolver] \uBCF4\uC548 \uD655\uC778 \uD398\uC774\uC9C0 \uAC10\uC9C0\uB428 - CAPTCHA \uC9C8\uBB38 \uB300\uAE30 \uC911...");
+      for (let i = 0; i < 10; i++) {
+        const hasQuestion = await page.evaluate(() => {
+          const bodyText = document.body.innerText || "";
+          return bodyText.includes("\uBB34\uC5C7\uC785\uB2C8\uAE4C") || bodyText.includes("[?]") || bodyText.includes("\uBC88\uC9F8 \uC22B\uC790") || bodyText.includes("\uBC88\uC9F8 \uAE00\uC790") || bodyText.includes("\uBE48 \uCE78");
+        });
+        if (hasQuestion) {
+          console.log("[CaptchaSolver] CAPTCHA \uC9C8\uBB38 \uAC10\uC9C0\uB428!");
+          break;
+        }
+        await this.delay(1e3);
+        console.log(`[CaptchaSolver] \uC9C8\uBB38 \uB300\uAE30 \uC911... (${i + 1}/10)`);
+      }
+    }
     const captchaInfo = await this.detectCaptcha(page);
     console.log("[CaptchaSolver] detectCaptcha result:", JSON.stringify(captchaInfo));
     if (!captchaInfo.detected) {
@@ -561,7 +580,7 @@ var ReceiptCaptchaSolver = class {
       const isReceiptCaptcha = (hasReceiptImage || hasSecurityCheck) && hasQuestion;
       const hasRecaptcha = document.querySelector('[class*="recaptcha"], iframe[src*="recaptcha"]') !== null;
       const hasGeneralCaptcha = document.querySelector('[id*="captcha"], [class*="captcha"]') !== null;
-      const isCaptcha = isReceiptCaptcha;
+      const isCaptcha = isReceiptCaptcha || hasSecurityCheck || hasReceiptImage;
       if (!isCaptcha) {
         return { detected: false, question: "", questionType: "unknown" };
       }
@@ -678,16 +697,30 @@ var ReceiptCaptchaSolver = class {
    * Claude Vision API로 답 추출
    */
   async askClaudeVision(imageBase64, question) {
-    const prompt = `\uC774 \uC601\uC218\uC99D \uC774\uBBF8\uC9C0\uB97C \uBCF4\uACE0 \uB2E4\uC74C \uC9C8\uBB38\uC5D0 \uB2F5\uD558\uC138\uC694.
+    const hasValidQuestion = question.length > 0 && question.length < 200 && (question.includes("\uBB34\uC5C7\uC785\uB2C8\uAE4C") || question.includes("[?]") || question.includes("\uBC88\uC9F8") || question.includes("\uBE48 \uCE78"));
+    const prompt = hasValidQuestion ? `\uC774 \uC601\uC218\uC99D CAPTCHA \uC774\uBBF8\uC9C0\uB97C \uBCF4\uACE0 \uB2E4\uC74C \uC9C8\uBB38\uC5D0 \uB2F5\uD558\uC138\uC694.
 
 \uC9C8\uBB38: ${question}
 
 \uC601\uC218\uC99D\uC5D0\uC11C \uD574\uB2F9 \uC815\uBCF4\uB97C \uCC3E\uC544 [?] \uC704\uCE58\uC5D0 \uB4E4\uC5B4\uAC08 \uB2F5\uB9CC \uC815\uD655\uD788 \uC54C\uB824\uC8FC\uC138\uC694.
-- \uC8FC\uC18C \uAD00\uB828 \uC9C8\uBB38\uC774\uBA74: \uD574\uB2F9 \uBC88\uC9C0\uC218\uB098 \uB3C4\uB85C\uBA85 \uBC88\uD638\uB9CC \uB2F5\uD558\uC138\uC694 (\uC608: "794", "123")
-- \uC804\uD654\uBC88\uD638 \uAD00\uB828 \uC9C8\uBB38\uC774\uBA74: \uD574\uB2F9 \uC22B\uC790\uB9CC \uB2F5\uD558\uC138\uC694 (\uC608: "1234", "5678")
-- \uC0C1\uD638\uBA85 \uAD00\uB828 \uC9C8\uBB38\uC774\uBA74: \uD574\uB2F9 \uD14D\uC2A4\uD2B8\uB9CC \uB2F5\uD558\uC138\uC694
+- "\uBC88\uC9F8 \uC22B\uC790\uB294 \uBB34\uC5C7\uC785\uB2C8\uAE4C" \uD615\uC2DD\uC774\uBA74: \uC601\uC218\uC99D\uC5D0\uC11C \uD574\uB2F9 \uC22B\uC790\uB97C \uCC3E\uC544 \uB2F5\uD558\uC138\uC694
+- \uC8FC\uC18C \uAD00\uB828\uC774\uBA74: \uBC88\uC9C0\uC218\uB098 \uB3C4\uB85C\uBA85 \uBC88\uD638\uB9CC (\uC608: "794")
+- \uC804\uD654\uBC88\uD638 \uAD00\uB828\uC774\uBA74: \uD574\uB2F9 \uC22B\uC790\uB9CC (\uC608: "5678")
+- \uC0C1\uD638\uBA85 \uAD00\uB828\uC774\uBA74: \uD574\uB2F9 \uD14D\uC2A4\uD2B8\uB9CC
 
-\uB2E4\uB978 \uC124\uBA85 \uC5C6\uC774 \uB2F5\uB9CC \uCD9C\uB825\uD558\uC138\uC694. \uC22B\uC790\uB098 \uD14D\uC2A4\uD2B8\uB9CC \uB2F5\uD558\uC138\uC694.`;
+\uB2E4\uB978 \uC124\uBA85 \uC5C6\uC774 \uB2F5\uB9CC \uCD9C\uB825\uD558\uC138\uC694. \uC22B\uC790\uB098 \uD14D\uC2A4\uD2B8\uB9CC \uB2F5\uD558\uC138\uC694.` : `\uC774 \uC774\uBBF8\uC9C0\uB294 \uB124\uC774\uBC84 \uBCF4\uC548 \uD655\uC778(CAPTCHA) \uD398\uC774\uC9C0\uC785\uB2C8\uB2E4.
+
+\uC774\uBBF8\uC9C0\uC5D0\uC11C:
+1. \uC9C8\uBB38\uC744 \uCC3E\uC73C\uC138\uC694 (\uC608: "\uAC00\uAC8C \uC804\uD654\uBC88\uD638\uC758 \uB4A4\uC5D0\uC11C 1\uBC88\uC9F8 \uC22B\uC790\uB294 \uBB34\uC5C7\uC785\uB2C8\uAE4C?")
+2. \uC601\uC218\uC99D \uC774\uBBF8\uC9C0\uC5D0\uC11C \uD574\uB2F9 \uC815\uBCF4\uB97C \uCC3E\uC73C\uC138\uC694
+3. \uC815\uB2F5\uB9CC \uCD9C\uB825\uD558\uC138\uC694
+
+\uC77C\uBC18\uC801\uC778 \uC9C8\uBB38 \uD615\uC2DD:
+- "\uC804\uD654\uBC88\uD638\uC758 \uB4A4\uC5D0\uC11C X\uBC88\uC9F8 \uC22B\uC790\uB294 \uBB34\uC5C7\uC785\uB2C8\uAE4C?"
+- "\uAC00\uAC8C \uC704\uCE58\uB294 [\uB3C4\uB85C\uBA85] [?] \uC785\uB2C8\uB2E4"
+- "[?]\uC5D0 \uB4E4\uC5B4\uAC08 \uC22B\uC790/\uD14D\uC2A4\uD2B8"
+
+\uB2E4\uB978 \uC124\uBA85 \uC5C6\uC774 \uC815\uB2F5\uB9CC \uCD9C\uB825\uD558\uC138\uC694 (\uC22B\uC790 \uD558\uB098 \uB610\uB294 \uC9E7\uC740 \uD14D\uC2A4\uD2B8).`;
     const response = await this.anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
       max_tokens: 50,

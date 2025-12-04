@@ -42,6 +42,36 @@ export class ReceiptCaptchaSolver {
       return false;
     }
 
+    // 0. 보안 확인 페이지 감지 - 질문이 나타날 때까지 대기
+    const hasSecurityPage = await page.evaluate(() => {
+      const bodyText = document.body.innerText || "";
+      return bodyText.includes("보안 확인") || bodyText.includes("영수증");
+    });
+
+    if (hasSecurityPage) {
+      console.log("[CaptchaSolver] 보안 확인 페이지 감지됨 - CAPTCHA 질문 대기 중...");
+
+      // 최대 10초 동안 질문이 나타나기를 기다림
+      for (let i = 0; i < 10; i++) {
+        const hasQuestion = await page.evaluate(() => {
+          const bodyText = document.body.innerText || "";
+          return bodyText.includes("무엇입니까") ||
+                 bodyText.includes("[?]") ||
+                 bodyText.includes("번째 숫자") ||
+                 bodyText.includes("번째 글자") ||
+                 bodyText.includes("빈 칸");
+        });
+
+        if (hasQuestion) {
+          console.log("[CaptchaSolver] CAPTCHA 질문 감지됨!");
+          break;
+        }
+
+        await this.delay(1000);
+        console.log(`[CaptchaSolver] 질문 대기 중... (${i + 1}/10)`);
+      }
+    }
+
     // 1. CAPTCHA 감지
     const captchaInfo = await this.detectCaptcha(page);
     console.log("[CaptchaSolver] detectCaptcha result:", JSON.stringify(captchaInfo));
@@ -123,7 +153,9 @@ export class ReceiptCaptchaSolver {
       const hasRecaptcha = document.querySelector('[class*="recaptcha"], iframe[src*="recaptcha"]') !== null;
       const hasGeneralCaptcha = document.querySelector('[id*="captcha"], [class*="captcha"]') !== null;
 
-      const isCaptcha = isReceiptCaptcha;
+      // 캡챠 감지 조건 완화: 보안 확인 OR 영수증이 있으면 CAPTCHA로 간주
+      // (질문이 없어도 일단 시도 - Claude Vision이 이미지에서 질문 추출)
+      const isCaptcha = isReceiptCaptcha || hasSecurityCheck || hasReceiptImage;
 
       if (!isCaptcha) {
         return { detected: false, question: "", questionType: "unknown" as const };
@@ -265,16 +297,36 @@ export class ReceiptCaptchaSolver {
     imageBase64: string,
     question: string
   ): Promise<string> {
-    const prompt = `이 영수증 이미지를 보고 다음 질문에 답하세요.
+    // 질문이 추출되지 않았거나 너무 길면 이미지에서 직접 찾도록 요청
+    const hasValidQuestion = question.length > 0 && question.length < 200 &&
+      (question.includes("무엇입니까") || question.includes("[?]") ||
+       question.includes("번째") || question.includes("빈 칸"));
+
+    const prompt = hasValidQuestion
+      ? `이 영수증 CAPTCHA 이미지를 보고 다음 질문에 답하세요.
 
 질문: ${question}
 
 영수증에서 해당 정보를 찾아 [?] 위치에 들어갈 답만 정확히 알려주세요.
-- 주소 관련 질문이면: 해당 번지수나 도로명 번호만 답하세요 (예: "794", "123")
-- 전화번호 관련 질문이면: 해당 숫자만 답하세요 (예: "1234", "5678")
-- 상호명 관련 질문이면: 해당 텍스트만 답하세요
+- "번째 숫자는 무엇입니까" 형식이면: 영수증에서 해당 숫자를 찾아 답하세요
+- 주소 관련이면: 번지수나 도로명 번호만 (예: "794")
+- 전화번호 관련이면: 해당 숫자만 (예: "5678")
+- 상호명 관련이면: 해당 텍스트만
 
-다른 설명 없이 답만 출력하세요. 숫자나 텍스트만 답하세요.`;
+다른 설명 없이 답만 출력하세요. 숫자나 텍스트만 답하세요.`
+      : `이 이미지는 네이버 보안 확인(CAPTCHA) 페이지입니다.
+
+이미지에서:
+1. 질문을 찾으세요 (예: "가게 전화번호의 뒤에서 1번째 숫자는 무엇입니까?")
+2. 영수증 이미지에서 해당 정보를 찾으세요
+3. 정답만 출력하세요
+
+일반적인 질문 형식:
+- "전화번호의 뒤에서 X번째 숫자는 무엇입니까?"
+- "가게 위치는 [도로명] [?] 입니다"
+- "[?]에 들어갈 숫자/텍스트"
+
+다른 설명 없이 정답만 출력하세요 (숫자 하나 또는 짧은 텍스트).`;
 
     const response = await this.anthropic.messages.create({
       model: "claude-sonnet-4-20250514",
