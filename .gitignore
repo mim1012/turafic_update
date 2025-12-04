@@ -3,3 +3,6 @@
 *.tmp
 *.bak
 *.log
+
+# Node modules (설치 시 자동 생성)
+node_modules/
