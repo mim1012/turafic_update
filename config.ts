@@ -33,7 +33,7 @@ const DEFAULT_CONFIG: Partial<UpdaterConfig> = {
   githubRawBase: 'https://raw.githubusercontent.com/mim1012/turafic_update/main',
   checkIntervalMs: 3 * 60 * 1000, // 3분
   localDir: 'C:\\turafic',
-  files: ['experiment-runner.js', 'worker-runner.js', 'parallel-ip-rotation-playwright.ts', 'playwright-save-login.ts', 'playwright-real-traffic.ts', 'version.json'],
+  files: ['experiment-runner.js', 'worker-runner.js', 'parallel-ip-rotation-playwright.ts', 'playwright-save-login.ts', 'playwright-real-traffic.ts', 'unified-runner.ts', 'save-account.ts', 'version.json'],
 };
 
 /**
