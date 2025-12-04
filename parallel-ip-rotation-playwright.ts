@@ -263,9 +263,17 @@ async function solveCaptcha(page: Page): Promise<boolean> {
 
   await sleep(randomInt(1000, 2000));
 
-  // 이미지 캡처
+  // 이미지 캡처 (정확한 셀렉터 우선)
   let imageBase64 = "";
-  const selectors = ['[class*="captcha"] img', 'img[src*="captcha"]', 'img[src*="receipt"]'];
+  const selectors = [
+    '#rcpt_img',              // 네이버 영수증 CAPTCHA 이미지 ID (가장 정확)
+    '.captcha_img',           // 네이버 영수증 CAPTCHA 클래스
+    '.captcha_img_cover img', // 부모 클래스로 찾기
+    'img[alt="캡차이미지"]',   // alt 속성
+    '[class*="captcha"] img',
+    'img[src*="captcha"]',
+    'img[src*="receipt"]',
+  ];
 
   for (const sel of selectors) {
     try {
