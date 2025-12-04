@@ -340,15 +340,33 @@ async function executeTraffic(
                      finalUrl.includes("/products/") ||
                      finalUrl.includes("smartstore.naver.com");
 
-    if (isProduct) {
-      log(`[${searchMode}] ✅ Success: ${finalUrl.substring(0, 60)}`);
-      stats.success++;
-      return true;
-    } else {
+    if (!isProduct) {
       log(`[${searchMode}] ❌ Not a product page: ${finalUrl.substring(0, 60)}`, "warn");
       stats.failed++;
       return false;
     }
+
+    // MID 검증 (정확한 MID만 성공)
+    const midMatched = finalUrl.includes(mid) || await page.evaluate((targetMid: string) => {
+      const elements = document.querySelectorAll('[data-nv-mid], [data-nvmid], [data-product-id]');
+      for (const el of Array.from(elements)) {
+        const dataMid = el.getAttribute('data-nv-mid') ||
+                       el.getAttribute('data-nvmid') ||
+                       el.getAttribute('data-product-id');
+        if (dataMid === targetMid) return true;
+      }
+      return false;
+    }, mid);
+
+    if (!midMatched) {
+      log(`[${searchMode}] ❌ MID mismatch: expected ${mid}, got ${finalUrl.substring(0, 60)}`, "warn");
+      stats.failed++;
+      return false;
+    }
+
+    log(`[${searchMode}] ✅ Success (MID verified): ${finalUrl.substring(0, 60)}`);
+    stats.success++;
+    return true;
 
   } catch (error: any) {
     log(`[${searchMode}] Error: ${error.message}`, "error");

@@ -685,15 +685,28 @@ async function executeTraffic(product, searchMode, account) {
     await sleep(4e3);
     const finalUrl = page.url();
     const isProduct = finalUrl.includes("/catalog/") || finalUrl.includes("/products/") || finalUrl.includes("smartstore.naver.com");
-    if (isProduct) {
-      log(`[${searchMode}] \u2705 Success: ${finalUrl.substring(0, 60)}`);
-      stats.success++;
-      return true;
-    } else {
+    if (!isProduct) {
       log(`[${searchMode}] \u274C Not a product page: ${finalUrl.substring(0, 60)}`, "warn");
       stats.failed++;
       return false;
     }
+    const midMatched = finalUrl.includes(mid) || await page.evaluate((targetMid) => {
+      const elements = document.querySelectorAll("[data-nv-mid], [data-nvmid], [data-product-id]");
+      for (const el of Array.from(elements)) {
+        const dataMid = el.getAttribute("data-nv-mid") || el.getAttribute("data-nvmid") || el.getAttribute("data-product-id");
+        if (dataMid === targetMid)
+          return true;
+      }
+      return false;
+    }, mid);
+    if (!midMatched) {
+      log(`[${searchMode}] \u274C MID mismatch: expected ${mid}, got ${finalUrl.substring(0, 60)}`, "warn");
+      stats.failed++;
+      return false;
+    }
+    log(`[${searchMode}] \u2705 Success (MID verified): ${finalUrl.substring(0, 60)}`);
+    stats.success++;
+    return true;
   } catch (error) {
     log(`[${searchMode}] Error: ${error.message}`, "error");
     stats.failed++;
