@@ -1,11 +1,12 @@
 {
-  "version": "2025-12-05-003000",
-  "timestamp": 1764872600000,
-  "hash": "fix-db-schema-slot-naver",
+  "version": "2025-12-05-004000",
+  "timestamp": 1764876200000,
+  "hash": "prb-browser-support",
   "features": [
     "auto-optimizer",
     "captcha-solver",
     "pkg-compatible",
-    "slot-naver-table"
+    "slot-naver-table",
+    "prb-support"
   ]
 }

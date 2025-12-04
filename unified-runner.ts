@@ -29,11 +29,41 @@ dotenv.config();
 import os from "os";
 import * as fs from "fs";
 import * as path from "path";
-import { chromium, Page, BrowserContext, Browser } from "playwright";
+import { chromium, Page as PlaywrightPage, BrowserContext, Browser } from "playwright";
+import { connect } from "puppeteer-real-browser";
+import type { Page as PuppeteerPage, Browser as PuppeteerBrowser } from "puppeteer";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
 import { getConfigWithEnvOverride, printSystemInfo, printOptimalConfig } from "./auto-optimizer";
 import { ReceiptCaptchaSolver } from "./ReceiptCaptchaSolver";
+
+// 브라우저 타입 선택: "playwright" | "prb"
+const BROWSER_TYPE = process.env.BROWSER_TYPE || "playwright";
+
+// ============ 브라우저 호환 헬퍼 ============
+async function pageType(page: any, selector: string, text: string): Promise<void> {
+  if (BROWSER_TYPE === "prb") {
+    await page.type(selector, text, { delay: 50 + Math.random() * 100 });
+  } else {
+    await page.fill(selector, text);
+  }
+}
+
+async function pagePress(page: any, selector: string, key: string): Promise<void> {
+  if (BROWSER_TYPE === "prb") {
+    await page.keyboard.press(key);
+  } else {
+    await page.press(selector, key);
+  }
+}
+
+async function pageWaitLoad(page: any): Promise<void> {
+  if (BROWSER_TYPE === "prb") {
+    await page.waitForNavigation({ waitUntil: "domcontentloaded" }).catch(() => {});
+  } else {
+    await page.waitForLoadState("domcontentloaded");
+  }
+}
 
 // ============ 자동 최적화 설정 ============
 const autoConfig = getConfigWithEnvOverride();
@@ -227,35 +257,53 @@ async function executeTraffic(
   searchMode: "통검" | "쇼검",
   account?: Account
 ): Promise<boolean> {
-  let browser: Browser | null = null;
+  let browser: Browser | PuppeteerBrowser | null = null;
   let context: BrowserContext | null = null;
+  let page: PlaywrightPage | PuppeteerPage | null = null;
 
   try {
-    // 브라우저 설정
-    const launchOptions = {
-      headless: false,
-      args: [
-        "--disable-blink-features=AutomationControlled",
-        "--no-sandbox",
-      ],
-    };
-
-    browser = await chromium.launch(launchOptions);
-
-    // 로그인 모드면 계정의 storageState 사용
-    if (account && fs.existsSync(account.path)) {
-      context = await browser.newContext({
-        storageState: account.path,
-        viewport: { width: 1280, height: 720 },
+    if (BROWSER_TYPE === "prb") {
+      // ========== PRB (puppeteer-real-browser) ==========
+      log(`[PRB] Starting browser...`);
+      const response = await connect({
+        headless: false,
+        turnstile: true,
+        fingerprint: true,
+        args: ["--no-sandbox", "--disable-setuid-sandbox"],
       });
-      log(`Using account: ${account.name}`);
+      browser = response.browser;
+      page = response.page;
+
+      // 뷰포트 설정
+      await page.setViewport({ width: 1280, height: 720 });
+
     } else {
-      context = await browser.newContext({
-        viewport: { width: 1280, height: 720 },
-      });
-    }
+      // ========== Playwright ==========
+      const launchOptions = {
+        headless: false,
+        args: [
+          "--disable-blink-features=AutomationControlled",
+          "--no-sandbox",
+        ],
+      };
 
-    const page = await context.newPage();
+      browser = await chromium.launch(launchOptions);
+
+      // 로그인 모드면 계정의 storageState 사용
+      if (account && fs.existsSync(account.path)) {
+        context = await browser.newContext({
+          storageState: account.path,
+          viewport: { width: 1280, height: 720 },
+        });
+        log(`Using account: ${account.name}`);
+      } else {
+        context = await browser.newContext({
+          viewport: { width: 1280, height: 720 },
+        });
+      }
+
+      page = await context.newPage();
+    }
 
     // 1. 네이버 메인 → 검색
     await page.goto("https://www.naver.com/", { waitUntil: "domcontentloaded" });
@@ -266,9 +314,9 @@ async function executeTraffic(
       ? product.keyword
       : product.product_name.substring(0, 50);
 
-    await page.fill('input[name="query"]', searchQuery);
-    await page.press('input[name="query"]', "Enter");
-    await page.waitForLoadState("domcontentloaded");
+    await pageType(page, 'input[name="query"]', searchQuery);
+    await pagePress(page, 'input[name="query"]', "Enter");
+    await pageWaitLoad(page);
     await sleep(2000 + Math.random() * 1000);
 
     // 2. 쇼검이면 쇼핑 탭 클릭
@@ -426,6 +474,7 @@ async function main() {
   log("  TURAFIC Unified Runner (Auto-Optimized)");
   log(`  Node ID: ${NODE_ID}`);
   log(`  Version: ${VERSION}`);
+  log(`  Browser: ${BROWSER_TYPE.toUpperCase()}`);
   log(`  Parallel: ${PARALLEL_COUNT} browsers`);
   log(`  Batch: ${BATCH_SIZE} tasks, ${BATCH_REST / 1000}s rest`);
   log("=".repeat(50));

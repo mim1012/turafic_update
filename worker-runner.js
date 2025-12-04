@@ -389,6 +389,7 @@ var import_os2 = __toESM(require("os"));
 var fs = __toESM(require("fs"));
 var path = __toESM(require("path"));
 var import_playwright = require("playwright");
+var import_puppeteer_real_browser = require("puppeteer-real-browser");
 var import_supabase_js = require("@supabase/supabase-js");
 
 // auto-optimizer.ts
@@ -843,6 +844,29 @@ var ReceiptCaptchaSolver = class {
 
 // unified-runner.ts
 dotenv.config();
+var BROWSER_TYPE = process.env.BROWSER_TYPE || "playwright";
+async function pageType(page, selector, text) {
+  if (BROWSER_TYPE === "prb") {
+    await page.type(selector, text, { delay: 50 + Math.random() * 100 });
+  } else {
+    await page.fill(selector, text);
+  }
+}
+async function pagePress(page, selector, key) {
+  if (BROWSER_TYPE === "prb") {
+    await page.keyboard.press(key);
+  } else {
+    await page.press(selector, key);
+  }
+}
+async function pageWaitLoad(page) {
+  if (BROWSER_TYPE === "prb") {
+    await page.waitForNavigation({ waitUntil: "domcontentloaded" }).catch(() => {
+    });
+  } else {
+    await page.waitForLoadState("domcontentloaded");
+  }
+}
 var autoConfig = getConfigWithEnvOverride();
 var NODE_ID = process.env.NODE_ID || `worker-${import_os2.default.hostname()}`;
 var HEARTBEAT_INTERVAL = 30 * 1e3;
@@ -959,33 +983,47 @@ function loadLocalAccounts() {
 async function executeTraffic(product, searchMode, account) {
   let browser = null;
   let context = null;
+  let page = null;
   try {
-    const launchOptions = {
-      headless: false,
-      args: [
-        "--disable-blink-features=AutomationControlled",
-        "--no-sandbox"
-      ]
-    };
-    browser = await import_playwright.chromium.launch(launchOptions);
-    if (account && fs.existsSync(account.path)) {
-      context = await browser.newContext({
-        storageState: account.path,
-        viewport: { width: 1280, height: 720 }
+    if (BROWSER_TYPE === "prb") {
+      log(`[PRB] Starting browser...`);
+      const response = await (0, import_puppeteer_real_browser.connect)({
+        headless: false,
+        turnstile: true,
+        fingerprint: true,
+        args: ["--no-sandbox", "--disable-setuid-sandbox"]
       });
-      log(`Using account: ${account.name}`);
+      browser = response.browser;
+      page = response.page;
+      await page.setViewport({ width: 1280, height: 720 });
     } else {
-      context = await browser.newContext({
-        viewport: { width: 1280, height: 720 }
-      });
+      const launchOptions = {
+        headless: false,
+        args: [
+          "--disable-blink-features=AutomationControlled",
+          "--no-sandbox"
+        ]
+      };
+      browser = await import_playwright.chromium.launch(launchOptions);
+      if (account && fs.existsSync(account.path)) {
+        context = await browser.newContext({
+          storageState: account.path,
+          viewport: { width: 1280, height: 720 }
+        });
+        log(`Using account: ${account.name}`);
+      } else {
+        context = await browser.newContext({
+          viewport: { width: 1280, height: 720 }
+        });
+      }
+      page = await context.newPage();
     }
-    const page = await context.newPage();
     await page.goto("https://www.naver.com/", { waitUntil: "domcontentloaded" });
     await sleep(1500 + Math.random() * 1e3);
     const searchQuery = searchMode === "\uC1FC\uAC80" ? product.keyword : product.product_name.substring(0, 50);
-    await page.fill('input[name="query"]', searchQuery);
-    await page.press('input[name="query"]', "Enter");
-    await page.waitForLoadState("domcontentloaded");
+    await pageType(page, 'input[name="query"]', searchQuery);
+    await pagePress(page, 'input[name="query"]', "Enter");
+    await pageWaitLoad(page);
     await sleep(2e3 + Math.random() * 1e3);
     if (searchMode === "\uC1FC\uAC80") {
       log(`[${searchMode}] Looking for shopping tab...`);
@@ -1107,6 +1145,7 @@ async function main() {
   log("  TURAFIC Unified Runner (Auto-Optimized)");
   log(`  Node ID: ${NODE_ID}`);
   log(`  Version: ${VERSION}`);
+  log(`  Browser: ${BROWSER_TYPE.toUpperCase()}`);
   log(`  Parallel: ${PARALLEL_COUNT} browsers`);
   log(`  Batch: ${BATCH_SIZE} tasks, ${BATCH_REST / 1e3}s rest`);
   log("=".repeat(50));
