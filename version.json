@@ -1,13 +1,14 @@
 {
-  "version": "2025-12-05-005000",
-  "timestamp": 1764879800000,
-  "hash": "word-shuffle-search",
+  "version": "2025-12-05-006000",
+  "timestamp": 1764883400000,
+  "hash": "env-path-fix",
   "features": [
     "auto-optimizer",
     "captcha-solver",
     "pkg-compatible",
     "slot-naver-table",
     "prb-support",
-    "word-shuffle"
+    "word-shuffle",
+    "multi-env-path"
   ]
 }

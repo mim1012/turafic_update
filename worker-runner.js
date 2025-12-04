@@ -385,9 +385,9 @@ var require_main = __commonJS({
 
 // unified-runner.ts
 var dotenv = __toESM(require_main());
+var path = __toESM(require("path"));
 var import_os2 = __toESM(require("os"));
 var fs = __toESM(require("fs"));
-var path = __toESM(require("path"));
 var import_playwright = require("playwright");
 var import_puppeteer_real_browser = require("puppeteer-real-browser");
 var import_supabase_js = require("@supabase/supabase-js");
@@ -843,7 +843,24 @@ var ReceiptCaptchaSolver = class {
 };
 
 // unified-runner.ts
-dotenv.config();
+var envPaths = [
+  path.join(process.cwd(), ".env"),
+  path.join(__dirname, ".env"),
+  "C:\\turafic\\.env"
+  // 기본 설치 경로
+];
+var envLoaded = false;
+for (const envPath of envPaths) {
+  const result = dotenv.config({ path: envPath });
+  if (!result.error) {
+    console.log(`[ENV] Loaded from: ${envPath}`);
+    envLoaded = true;
+    break;
+  }
+}
+if (!envLoaded) {
+  console.log(`[ENV] Warning: .env not found in: ${envPaths.join(", ")}`);
+}
 var BROWSER_TYPE = process.env.BROWSER_TYPE || "playwright";
 async function pageType(page, selector, text) {
   if (BROWSER_TYPE === "prb") {

@@ -24,11 +24,31 @@
  */
 
 import * as dotenv from "dotenv";
-dotenv.config();
+import * as path from "path";
+
+// .env 파일을 스크립트 위치 또는 현재 디렉토리에서 찾기
+const envPaths = [
+  path.join(process.cwd(), '.env'),
+  path.join(__dirname, '.env'),
+  'C:\\turafic\\.env',  // 기본 설치 경로
+];
+
+let envLoaded = false;
+for (const envPath of envPaths) {
+  const result = dotenv.config({ path: envPath });
+  if (!result.error) {
+    console.log(`[ENV] Loaded from: ${envPath}`);
+    envLoaded = true;
+    break;
+  }
+}
+
+if (!envLoaded) {
+  console.log(`[ENV] Warning: .env not found in: ${envPaths.join(', ')}`);
+}
 
 import os from "os";
 import * as fs from "fs";
-import * as path from "path";
 import { chromium, Page as PlaywrightPage, BrowserContext, Browser } from "playwright";
 import { connect } from "puppeteer-real-browser";
 import type { Page as PuppeteerPage, Browser as PuppeteerBrowser } from "puppeteer";
