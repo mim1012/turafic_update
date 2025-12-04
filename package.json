@@ -6,6 +6,8 @@
   "bin": "auto-updater.js",
   "scripts": {
     "build": "esbuild auto-updater.ts --bundle --platform=node --target=node18 --outfile=auto-updater.js",
+    "build:worker": "esbuild unified-runner.ts --bundle --platform=node --target=node18 --external:playwright --external:@anthropic-ai/sdk --external:@supabase/supabase-js --outfile=worker-runner.js",
+    "build:all": "npm run build && npm run build:worker",
     "build:exe": "npm run build && pkg auto-updater.js -t node18-win-x64 -o turafic-updater.exe",
     "start": "node auto-updater.js",
     "dev": "tsx auto-updater.ts"

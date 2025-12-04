@@ -30,15 +30,19 @@ import * as path from "path";
 import { chromium, Page, BrowserContext, Browser } from "playwright";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
+import { getConfigWithEnvOverride, printSystemInfo, printOptimalConfig } from "./auto-optimizer";
 
-// ============ 설정 ============
+// ============ 자동 최적화 설정 ============
+const autoConfig = getConfigWithEnvOverride();
+
 const NODE_ID = process.env.NODE_ID || `worker-${os.hostname()}`;
 const HEARTBEAT_INTERVAL = 30 * 1000;  // 30초
-const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || "10");
-const BATCH_REST = parseInt(process.env.BATCH_REST || "60") * 1000;  // 배치 간 휴식
-const TASK_REST = parseInt(process.env.TASK_REST || "5") * 1000;     // 작업 간 휴식
+const BATCH_SIZE = autoConfig.batchSize;
+const BATCH_REST = autoConfig.batchRestSec * 1000;  // 배치 간 휴식 (자동 계산)
+const TASK_REST = autoConfig.taskRestSec * 1000;    // 작업 간 휴식 (자동 계산)
+const PARALLEL_COUNT = autoConfig.parallelCount;    // 병렬 브라우저 수 (자동 계산)
 const ACCOUNTS_DIR = path.join(process.cwd(), "accounts");
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";  // 자동 최적화 버전
 
 // ============ Supabase 클라이언트 (2개) ============
 let supabaseControl: SupabaseClient;  // navertrafictest (모드 설정, 워커 등록)
@@ -358,10 +362,18 @@ async function executeTraffic(
 
 // ============ 메인 루프 ============
 async function main() {
+  // 시스템 정보 및 자동 최적화 설정 출력
+  console.log("");
+  printSystemInfo(autoConfig.systemInfo);
+  console.log("");
+  printOptimalConfig(autoConfig);
+
   log("=".repeat(50));
-  log("  TURAFIC Unified Runner");
+  log("  TURAFIC Unified Runner (Auto-Optimized)");
   log(`  Node ID: ${NODE_ID}`);
   log(`  Version: ${VERSION}`);
+  log(`  Parallel: ${PARALLEL_COUNT} browsers`);
+  log(`  Batch: ${BATCH_SIZE} tasks, ${BATCH_REST / 1000}s rest`);
   log("=".repeat(50));
 
   // Supabase 초기화
