@@ -1,6 +1,8 @@
-#!/usr/bin/env npx tsx
 /**
  * Unified Traffic Runner
+ *
+ * 주의: pkg 빌드 호환성을 위해 shebang(#!/usr/bin/env npx tsx) 제거됨
+ * 로컬 실행: npx tsx unified-runner.ts
  *
  * 4개 모드 지원:
  * - 통검 로그인 (tonggum_login)

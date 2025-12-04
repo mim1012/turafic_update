@@ -1,4 +1,3 @@
-#!/usr/bin/env npx tsx
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;

@@ -1,10 +1,10 @@
 {
-  "version": "2025-12-05-001500",
-  "timestamp": 1764868500000,
-  "hash": "fix-import-meta-error",
+  "version": "2025-12-05-002000",
+  "timestamp": 1764869200000,
+  "hash": "fix-shebang-pkg-compat",
   "features": [
     "auto-optimizer",
     "captcha-solver",
-    "import-meta-fix"
+    "pkg-compatible"
   ]
 }
