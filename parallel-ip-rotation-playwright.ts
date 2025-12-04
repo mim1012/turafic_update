@@ -240,7 +240,10 @@ async function solveCaptcha(page: Page): Promise<boolean> {
     const bodyText = document.body.innerText || "";
     const hasReceiptImage = bodyText.includes("영수증") || bodyText.includes("가상으로 제작");
     const hasQuestion = bodyText.includes("무엇입니까") || bodyText.includes("[?]") || bodyText.includes("번째 숫자");
-    const isCaptcha = hasReceiptImage && hasQuestion;
+    const hasSecurityCheck = bodyText.includes("보안 확인");
+
+    // 개선된 감지 로직: (영수증 OR 보안확인) AND 질문 = CAPTCHA
+    const isCaptcha = (hasReceiptImage || hasSecurityCheck) && hasQuestion;
 
     if (!isCaptcha) return { detected: false, question: "" };
 
