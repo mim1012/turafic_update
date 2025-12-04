@@ -12,8 +12,6 @@
  */
 
 import os from "os";
-import { fileURLToPath } from "url";
-import path from "path";
 
 // ============ 타입 ============
 export interface SystemInfo {
@@ -156,26 +154,5 @@ export function getConfigWithEnvOverride(): OptimalConfig {
   };
 }
 
-// ============ CLI 실행 ============
-// 직접 실행 시: npx tsx auto-optimizer.ts
-// CJS 번들링 호환을 위해 import.meta.url 대신 다른 방식 사용
-function isMainModule(): boolean {
-  try {
-    // ESM 환경
-    if (typeof import.meta !== 'undefined' && import.meta.url) {
-      const __filename = fileURLToPath(import.meta.url);
-      return process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename);
-    }
-  } catch {}
-
-  // CJS 환경 또는 번들된 환경에서는 CLI 감지 비활성화
-  return false;
-}
-
-if (isMainModule()) {
-  console.log("");
-  printSystemInfo();
-  console.log("");
-  printOptimalConfig();
-  console.log("");
-}
+// CLI 실행 코드 제거 (번들에서 import.meta 에러 발생)
+// 직접 테스트 필요시: npx tsx auto-optimizer.ts 대신 별도 테스트 스크립트 사용

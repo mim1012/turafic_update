@@ -97,7 +97,7 @@ var require_package = __commonJS({
 var require_main = __commonJS({
   "node_modules/dotenv/lib/main.js"(exports2, module2) {
     var fs2 = require("fs");
-    var path3 = require("path");
+    var path2 = require("path");
     var os3 = require("os");
     var crypto = require("crypto");
     var packageJson = require_package();
@@ -213,7 +213,7 @@ var require_main = __commonJS({
           possibleVaultPath = options.path.endsWith(".vault") ? options.path : `${options.path}.vault`;
         }
       } else {
-        possibleVaultPath = path3.resolve(process.cwd(), ".env.vault");
+        possibleVaultPath = path2.resolve(process.cwd(), ".env.vault");
       }
       if (fs2.existsSync(possibleVaultPath)) {
         return possibleVaultPath;
@@ -221,7 +221,7 @@ var require_main = __commonJS({
       return null;
     }
     function _resolveHome(envPath) {
-      return envPath[0] === "~" ? path3.join(os3.homedir(), envPath.slice(1)) : envPath;
+      return envPath[0] === "~" ? path2.join(os3.homedir(), envPath.slice(1)) : envPath;
     }
     function _configVault(options) {
       const debug = Boolean(options && options.debug);
@@ -238,7 +238,7 @@ var require_main = __commonJS({
       return { parsed };
     }
     function configDotenv(options) {
-      const dotenvPath = path3.resolve(process.cwd(), ".env");
+      const dotenvPath = path2.resolve(process.cwd(), ".env");
       let encoding = "utf8";
       const debug = Boolean(options && options.debug);
       const quiet = options && "quiet" in options ? options.quiet : true;
@@ -262,13 +262,13 @@ var require_main = __commonJS({
       }
       let lastError;
       const parsedAll = {};
-      for (const path4 of optionPaths) {
+      for (const path3 of optionPaths) {
         try {
-          const parsed = DotenvModule.parse(fs2.readFileSync(path4, { encoding }));
+          const parsed = DotenvModule.parse(fs2.readFileSync(path3, { encoding }));
           DotenvModule.populate(parsedAll, parsed, options);
         } catch (e) {
           if (debug) {
-            _debug(`Failed to load ${path4} ${e.message}`);
+            _debug(`Failed to load ${path3} ${e.message}`);
           }
           lastError = e;
         }
@@ -283,7 +283,7 @@ var require_main = __commonJS({
         const shortPaths = [];
         for (const filePath of optionPaths) {
           try {
-            const relative = path3.relative(process.cwd(), filePath);
+            const relative = path2.relative(process.cwd(), filePath);
             shortPaths.push(relative);
           } catch (e) {
             if (debug) {
@@ -387,15 +387,12 @@ var require_main = __commonJS({
 var dotenv = __toESM(require_main());
 var import_os2 = __toESM(require("os"));
 var fs = __toESM(require("fs"));
-var path2 = __toESM(require("path"));
+var path = __toESM(require("path"));
 var import_playwright = require("playwright");
 var import_supabase_js = require("@supabase/supabase-js");
 
 // auto-optimizer.ts
 var import_os = __toESM(require("os"));
-var import_url = require("url");
-var import_path = __toESM(require("path"));
-var import_meta = {};
 var BROWSER_MEMORY_MB = 600;
 var MIN_FREE_MEMORY_GB = 2;
 var SAFETY_MARGIN = 0.6;
@@ -475,23 +472,6 @@ function getConfigWithEnvOverride() {
     batchRestSec: process.env.BATCH_REST ? parseInt(process.env.BATCH_REST) : autoConfig2.batchRestSec,
     taskRestSec: process.env.TASK_REST ? parseInt(process.env.TASK_REST) : autoConfig2.taskRestSec
   };
-}
-function isMainModule() {
-  try {
-    if (typeof import_meta !== "undefined" && import_meta.url) {
-      const __filename = (0, import_url.fileURLToPath)(import_meta.url);
-      return process.argv[1] && import_path.default.resolve(process.argv[1]) === import_path.default.resolve(__filename);
-    }
-  } catch {
-  }
-  return false;
-}
-if (isMainModule()) {
-  console.log("");
-  printSystemInfo();
-  console.log("");
-  printOptimalConfig();
-  console.log("");
 }
 
 // ReceiptCaptchaSolver.ts
@@ -871,7 +851,7 @@ var BATCH_SIZE = autoConfig.batchSize;
 var BATCH_REST = autoConfig.batchRestSec * 1e3;
 var TASK_REST = autoConfig.taskRestSec * 1e3;
 var PARALLEL_COUNT = autoConfig.parallelCount;
-var ACCOUNTS_DIR = path2.join(process.cwd(), "accounts");
+var ACCOUNTS_DIR = path.join(process.cwd(), "accounts");
 var VERSION = "1.1.0";
 var supabaseControl;
 var supabaseProduction;
@@ -975,7 +955,7 @@ function loadLocalAccounts() {
   const files = fs.readdirSync(ACCOUNTS_DIR).filter((f) => f.endsWith(".json"));
   return files.map((f) => ({
     name: f.replace(".json", ""),
-    path: path2.join(ACCOUNTS_DIR, f)
+    path: path.join(ACCOUNTS_DIR, f)
   }));
 }
 async function executeTraffic(product, searchMode, account) {
