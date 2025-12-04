@@ -1,12 +1,13 @@
 {
-  "version": "2025-12-05-004000",
-  "timestamp": 1764876200000,
-  "hash": "prb-browser-support",
+  "version": "2025-12-05-005000",
+  "timestamp": 1764879800000,
+  "hash": "word-shuffle-search",
   "features": [
     "auto-optimizer",
     "captcha-solver",
     "pkg-compatible",
     "slot-naver-table",
-    "prb-support"
+    "prb-support",
+    "word-shuffle"
   ]
 }

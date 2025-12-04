@@ -65,6 +65,27 @@ async function pageWaitLoad(page: any): Promise<void> {
   }
 }
 
+// ============ 상품명 단어 셔플 ============
+function shuffleWords(productName: string): string {
+  // 특수문자/괄호 제거하고 단어 분리
+  const cleaned = productName
+    .replace(/[\[\](){}]/g, ' ')  // 괄호 제거
+    .replace(/[^\w\sㄱ-ㅎㅏ-ㅣ가-힣]/g, ' ')  // 특수문자 제거
+    .trim();
+
+  const words = cleaned.split(/\s+/).filter(w => w.length > 0);
+
+  if (words.length <= 1) return cleaned;
+
+  // Fisher-Yates 셔플
+  for (let i = words.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [words[i], words[j]] = [words[j], words[i]];
+  }
+
+  return words.join(' ');
+}
+
 // ============ 자동 최적화 설정 ============
 const autoConfig = getConfigWithEnvOverride();
 
@@ -309,10 +330,12 @@ async function executeTraffic(
     await page.goto("https://www.naver.com/", { waitUntil: "domcontentloaded" });
     await sleep(1500 + Math.random() * 1000);
 
-    // 검색어: 쇼검은 keyword, 통검은 productName
+    // 검색어: 쇼검은 keyword, 통검은 productName (단어 셔플)
     const searchQuery = searchMode === "쇼검"
       ? product.keyword
-      : product.product_name.substring(0, 50);
+      : shuffleWords(product.product_name).substring(0, 50);
+
+    log(`[${searchMode}] 검색어: ${searchQuery}`);
 
     await pageType(page, 'input[name="query"]', searchQuery);
     await pagePress(page, 'input[name="query"]', "Enter");

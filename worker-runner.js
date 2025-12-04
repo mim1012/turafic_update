@@ -867,6 +867,17 @@ async function pageWaitLoad(page) {
     await page.waitForLoadState("domcontentloaded");
   }
 }
+function shuffleWords(productName) {
+  const cleaned = productName.replace(/[\[\](){}]/g, " ").replace(/[^\w\sㄱ-ㅎㅏ-ㅣ가-힣]/g, " ").trim();
+  const words = cleaned.split(/\s+/).filter((w) => w.length > 0);
+  if (words.length <= 1)
+    return cleaned;
+  for (let i = words.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [words[i], words[j]] = [words[j], words[i]];
+  }
+  return words.join(" ");
+}
 var autoConfig = getConfigWithEnvOverride();
 var NODE_ID = process.env.NODE_ID || `worker-${import_os2.default.hostname()}`;
 var HEARTBEAT_INTERVAL = 30 * 1e3;
@@ -1020,7 +1031,8 @@ async function executeTraffic(product, searchMode, account) {
     }
     await page.goto("https://www.naver.com/", { waitUntil: "domcontentloaded" });
     await sleep(1500 + Math.random() * 1e3);
-    const searchQuery = searchMode === "\uC1FC\uAC80" ? product.keyword : product.product_name.substring(0, 50);
+    const searchQuery = searchMode === "\uC1FC\uAC80" ? product.keyword : shuffleWords(product.product_name).substring(0, 50);
+    log(`[${searchMode}] \uAC80\uC0C9\uC5B4: ${searchQuery}`);
     await pageType(page, 'input[name="query"]', searchQuery);
     await pagePress(page, 'input[name="query"]', "Enter");
     await pageWaitLoad(page);
