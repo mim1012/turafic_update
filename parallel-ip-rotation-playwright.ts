@@ -102,6 +102,16 @@ function randomInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+// 단어 랜덤 셔플 (Fisher-Yates)
+function shuffleWords(text: string): string {
+  const words = text.trim().split(/\s+/);
+  for (let i = words.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [words[i], words[j]] = [words[j], words[i]];
+  }
+  return words.join(' ');
+}
+
 function printStats() {
   const elapsed = Math.floor((Date.now() - stats.startTime.getTime()) / 1000 / 60);
   const rate = stats.total > 0 ? ((stats.success / stats.total) * 100).toFixed(1) : "0";
@@ -347,8 +357,10 @@ async function executeTraffic(task: TrafficTask, context: BrowserContext): Promi
     await page.waitForLoadState("domcontentloaded");
     await sleep(randomInt(1500, 2500));
 
-    // 2. 검색
-    const searchQuery = productName.substring(0, 50);
+    // 2. 검색 (단어 랜덤 셔플)
+    const shuffledName = shuffleWords(productName);
+    const searchQuery = shuffledName.substring(0, 50);
+    log(`Search: ${searchQuery}`);
     const searchInput = page.locator("#query");
     await searchInput.click();
     await sleep(randomInt(300, 600));
