@@ -1,7 +1,7 @@
 {
-  "version": "2025-12-05-006000",
-  "timestamp": 1764883400000,
-  "hash": "env-path-fix",
+  "version": "2025-12-05-007000",
+  "timestamp": 1764890000000,
+  "hash": "v7-style-prb",
   "features": [
     "auto-optimizer",
     "captcha-solver",
@@ -9,6 +9,7 @@
     "slot-naver-table",
     "prb-support",
     "word-shuffle",
-    "multi-env-path"
+    "multi-env-path",
+    "v7-style-captcha-0pct"
   ]
 }

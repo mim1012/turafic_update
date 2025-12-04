@@ -304,19 +304,20 @@ async function executeTraffic(
 
   try {
     if (BROWSER_TYPE === "prb") {
-      // ========== PRB (puppeteer-real-browser) ==========
-      log(`[PRB] Starting browser...`);
+      // ========== PRB (puppeteer-real-browser) - V7 Style ==========
+      log(`[PRB-V7] Starting browser (PC mode, no fingerprint)...`);
       const response = await connect({
         headless: false,
         turnstile: true,
-        fingerprint: true,
+        // fingerprint: false - V7 핵심! PC 모드 유지
         args: ["--no-sandbox", "--disable-setuid-sandbox"],
       });
       browser = response.browser;
       page = response.page;
 
-      // 뷰포트 설정
-      await page.setViewport({ width: 1280, height: 720 });
+      // 타임아웃 설정
+      page.setDefaultTimeout(30000);
+      page.setDefaultNavigationTimeout(30000);
 
     } else {
       // ========== Playwright ==========
@@ -346,7 +347,7 @@ async function executeTraffic(
       page = await context.newPage();
     }
 
-    // 1. 네이버 메인 → 검색
+    // 1. 네이버 메인 → 검색 (V7 Style: JS 이벤트 기반)
     await page.goto("https://www.naver.com/", { waitUntil: "domcontentloaded" });
     await sleep(1500 + Math.random() * 1000);
 
@@ -357,10 +358,39 @@ async function executeTraffic(
 
     log(`[${searchMode}] 검색어: ${searchQuery}`);
 
-    await pageType(page, 'input[name="query"]', searchQuery);
-    await pagePress(page, 'input[name="query"]', "Enter");
-    await pageWaitLoad(page);
-    await sleep(2000 + Math.random() * 1000);
+    // V7 Style: JS 이벤트 기반 검색 (PRB일 때)
+    if (BROWSER_TYPE === "prb") {
+      const searchSubmitted = await page.evaluate((query: string) => {
+        const input = document.querySelector('input[name="query"]') as HTMLInputElement;
+        if (input) {
+          input.value = query;
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+          const form = input.closest('form');
+          if (form) {
+            form.submit();
+            return true;
+          }
+        }
+        return false;
+      }, searchQuery);
+
+      if (!searchSubmitted) {
+        // Fallback: 일반 타이핑
+        await pageType(page, 'input[name="query"]', searchQuery);
+        await pagePress(page, 'input[name="query"]', "Enter");
+      }
+
+      // Navigation 대기
+      try {
+        await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 20000 });
+      } catch {}
+    } else {
+      // Playwright: 일반 방식
+      await pageType(page, 'input[name="query"]', searchQuery);
+      await pagePress(page, 'input[name="query"]', "Enter");
+      await pageWaitLoad(page);
+    }
+    await sleep(2500 + Math.random() * 1000);
 
     // 2. 쇼검이면 쇼핑 탭 클릭
     if (searchMode === "쇼검") {
@@ -387,12 +417,94 @@ async function executeTraffic(
       await sleep(500);
     }
 
-    // 4. MID 찾아서 클릭
+    // 4. MID 찾아서 클릭 (V7 Style: DOM 클릭 + 새 탭 핸들링)
     const mid = product.mid;
     log(`[${searchMode}] Searching for MID: ${mid}`);
 
-    // 직접 smartstore 링크 클릭 시도 (통검)
-    if (searchMode === "통검") {
+    // V7 Style: PRB일 때 새 탭 핸들링 + DOM 클릭
+    if (BROWSER_TYPE === "prb" && searchMode === "통검") {
+      let productPage: PuppeteerPage | null = null;
+
+      // 새 탭 핸들링 Promise 설정 (V7 핵심!)
+      const newTabPromise = new Promise<PuppeteerPage>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('New tab timeout')), 10000);
+
+        (browser as PuppeteerBrowser).once('targetcreated', async (target: any) => {
+          clearTimeout(timeout);
+          if (target.type() === 'page') {
+            const newPage = await target.page();
+            if (newPage) resolve(newPage as PuppeteerPage);
+            else reject(new Error('Failed to get new page'));
+          }
+        });
+      });
+
+      // DOM 클릭 (V7 핵심!: Bridge URL 스킵, 직접 smartstore만)
+      const clickResult = await page.evaluate((targetMid: string) => {
+        const links = Array.from(document.querySelectorAll('a'));
+
+        // 1차: MID 포함된 smartstore 직접 링크
+        for (const link of links) {
+          const href = link.href || '';
+          // Bridge URL 스킵 (V7 핵심!)
+          if (href.includes('/bridge') || href.includes('cr.shopping') ||
+              href.includes('cr2.shopping') || href.includes('cr3.shopping')) {
+            continue;
+          }
+          if ((href.includes('smartstore.naver.com') || href.includes('brand.naver.com')) &&
+              href.includes('/products/')) {
+            if (href.includes(targetMid)) {
+              (link as HTMLElement).click();
+              return { clicked: true, href, method: 'direct-mid' };
+            }
+          }
+        }
+
+        // 2차: 아무 smartstore 링크 (MID 없어도)
+        for (const link of links) {
+          const href = link.href || '';
+          if (href.includes('/bridge') || href.includes('cr.shopping')) continue;
+          if ((href.includes('smartstore.naver.com') || href.includes('brand.naver.com')) &&
+              href.includes('/products/')) {
+            (link as HTMLElement).click();
+            return { clicked: true, href, method: 'any-smartstore' };
+          }
+        }
+
+        return { clicked: false };
+      }, mid);
+
+      if (clickResult.clicked) {
+        log(`[${searchMode}] DOM click: ${clickResult.method}`);
+
+        // 새 탭 대기
+        try {
+          productPage = await newTabPromise;
+          log(`[${searchMode}] New tab opened`);
+          try {
+            await productPage.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 });
+          } catch {}
+          await sleep(2000);
+
+          // 상품 페이지 검증
+          const pageUrl = productPage.url();
+          const isSmartStore = pageUrl.includes('smartstore.naver.com') && pageUrl.includes('/products/');
+
+          if (isSmartStore) {
+            log(`[${searchMode}] ✅ Product page success: ${pageUrl.substring(0, 60)}`);
+            stats.success++;
+
+            // 새 탭 닫기
+            await productPage.close().catch(() => {});
+            return true;
+          }
+        } catch (e) {
+          log(`[${searchMode}] New tab wait failed, checking current page`);
+          // 새 탭 없음 - 현재 페이지에서 진행
+        }
+      }
+    } else if (searchMode === "통검") {
+      // Playwright: 기존 방식
       const clicked = await page.evaluate((targetMid: string) => {
         const links = Array.from(document.querySelectorAll("a"));
         for (const link of links) {
