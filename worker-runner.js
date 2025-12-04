@@ -486,6 +486,313 @@ if (isMainModule) {
   console.log("");
 }
 
+// ReceiptCaptchaSolver.ts
+var import_sdk = __toESM(require("@anthropic-ai/sdk"));
+var ReceiptCaptchaSolver = class {
+  anthropic;
+  maxRetries = 2;
+  constructor() {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      console.warn(
+        "[CaptchaSolver] ANTHROPIC_API_KEY not set - CAPTCHA solving disabled"
+      );
+    }
+    this.anthropic = new import_sdk.default({
+      apiKey: apiKey || "dummy-key"
+    });
+  }
+  /**
+   * CAPTCHA 해결 시도
+   * @returns true if solved, false if failed or no CAPTCHA
+   */
+  async solve(page) {
+    if (!process.env.ANTHROPIC_API_KEY) {
+      console.log("[CaptchaSolver] API key not configured, skipping");
+      return false;
+    }
+    const captchaInfo = await this.detectCaptcha(page);
+    console.log("[CaptchaSolver] detectCaptcha result:", JSON.stringify(captchaInfo));
+    if (!captchaInfo.detected) {
+      console.log("[CaptchaSolver] \uC601\uC218\uC99D CAPTCHA \uC544\uB2D8 - \uB2E4\uB978 \uC720\uD615\uC758 \uBCF4\uC548 \uD398\uC774\uC9C0");
+      return false;
+    }
+    console.log("[CaptchaSolver] \uC601\uC218\uC99D CAPTCHA \uAC10\uC9C0\uB428");
+    console.log(`[CaptchaSolver] \uC9C8\uBB38: ${captchaInfo.question}`);
+    for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
+      try {
+        console.log(`[CaptchaSolver] \uD574\uACB0 \uC2DC\uB3C4 ${attempt}/${this.maxRetries}`);
+        const receiptImage = await this.captureReceiptImage(page);
+        const answer = await this.askClaudeVision(
+          receiptImage,
+          captchaInfo.question
+        );
+        console.log(`[CaptchaSolver] Claude \uC751\uB2F5: "${answer}"`);
+        await this.submitAnswer(page, answer);
+        const solved = await this.verifySolved(page);
+        if (solved) {
+          console.log("[CaptchaSolver] CAPTCHA \uD574\uACB0 \uC131\uACF5!");
+          return true;
+        }
+        console.log(`[CaptchaSolver] \uC2DC\uB3C4 ${attempt} \uC2E4\uD328, \uC7AC\uC2DC\uB3C4...`);
+        await this.delay(1e3);
+      } catch (error) {
+        console.error(`[CaptchaSolver] \uC2DC\uB3C4 ${attempt} \uC5D0\uB7EC:`, error);
+      }
+    }
+    console.log("[CaptchaSolver] \uBAA8\uB4E0 \uC2DC\uB3C4 \uC2E4\uD328");
+    return false;
+  }
+  /**
+   * CAPTCHA 페이지 감지
+   */
+  async detectCaptcha(page) {
+    try {
+      await page.screenshot({ path: "docs/captcha_debug.png", fullPage: true });
+      console.log("[CaptchaSolver] DEBUG: Screenshot saved to docs/captcha_debug.png");
+    } catch (e) {
+      console.log("[CaptchaSolver] DEBUG: Failed to save screenshot");
+    }
+    return await page.evaluate(() => {
+      const bodyText = document.body.innerText || "";
+      const hasReceiptImage = bodyText.includes("\uC601\uC218\uC99D") || bodyText.includes("\uAC00\uC0C1\uC73C\uB85C \uC81C\uC791");
+      const hasQuestion = bodyText.includes("\uBB34\uC5C7\uC785\uB2C8\uAE4C") || bodyText.includes("\uBE48 \uCE78\uC744 \uCC44\uC6CC\uC8FC\uC138\uC694") || bodyText.includes("[?]") || bodyText.includes("\uBC88\uC9F8 \uC22B\uC790");
+      const hasSecurityCheck = bodyText.includes("\uBCF4\uC548 \uD655\uC778");
+      const isReceiptCaptcha = (hasReceiptImage || hasSecurityCheck) && hasQuestion;
+      const hasRecaptcha = document.querySelector('[class*="recaptcha"], iframe[src*="recaptcha"]') !== null;
+      const hasGeneralCaptcha = document.querySelector('[id*="captcha"], [class*="captcha"]') !== null;
+      const isCaptcha = isReceiptCaptcha;
+      if (!isCaptcha) {
+        return { detected: false, question: "", questionType: "unknown" };
+      }
+      let question = "";
+      const questionMatch = bodyText.match(/.+무엇입니까\??/);
+      if (questionMatch) {
+        question = questionMatch[0].trim();
+      }
+      if (!question) {
+        const redElements = document.querySelectorAll(
+          '[style*="color: rgb(255, 68, 68)"], [style*="color:#ff4444"], [style*="color: red"], [style*="color:#"]'
+        );
+        for (const elem of redElements) {
+          const text = elem.textContent?.trim();
+          if (text && (text.includes("[?]") || text.includes("\uBB34\uC5C7\uC785\uB2C8\uAE4C") || text.includes("\uBC88\uC9F8"))) {
+            question = text;
+            break;
+          }
+        }
+      }
+      if (!question) {
+        const match = bodyText.match(/영수증의\s+.+?\s+\[?\?\]?\s*입니다/);
+        if (match) {
+          question = match[0];
+        }
+      }
+      if (!question) {
+        const patterns = [
+          /가게\s*위치는\s*.+?\s*\[?\?\]?\s*입니다/,
+          /전화번호는\s*.+?\s*\[?\?\]?\s*입니다/,
+          /상호명은\s*.+?\s*\[?\?\]?\s*입니다/,
+          /.+번째\s*숫자는\s*무엇입니까/,
+          /.+번째\s*글자는\s*무엇입니까/
+        ];
+        for (const pattern of patterns) {
+          const m = bodyText.match(pattern);
+          if (m) {
+            question = m[0];
+            break;
+          }
+        }
+      }
+      if (!question) {
+        question = bodyText.substring(0, 300);
+      }
+      let questionType = "unknown";
+      if (question.includes("\uC704\uCE58") || question.includes("\uC8FC\uC18C") || question.includes("\uAE38")) {
+        questionType = "address";
+      } else if (question.includes("\uC804\uD654") || question.includes("\uBC88\uD638")) {
+        questionType = "phone";
+      } else if (question.includes("\uC0C1\uD638") || question.includes("\uAC00\uAC8C \uC774\uB984")) {
+        questionType = "store";
+      }
+      return { detected: true, question, questionType };
+    });
+  }
+  /**
+   * 영수증 이미지 캡처
+   */
+  async captureReceiptImage(page) {
+    const selectors = [
+      "#rcpt_img",
+      // 네이버 영수증 CAPTCHA 이미지 ID (정확함)
+      ".captcha_img",
+      // 네이버 영수증 CAPTCHA 이미지 클래스
+      ".captcha_img_cover img",
+      // 부모 클래스로 찾기
+      'img[alt="\uCEA1\uCC28\uC774\uBBF8\uC9C0"]',
+      // alt 속성으로 찾기
+      'img[src*="captcha"]',
+      'img[src*="receipt"]',
+      ".captcha_image img",
+      ".receipt_image img",
+      '[class*="captcha"] img',
+      '[class*="receipt"] img',
+      ".security_check img",
+      "#captcha_image"
+    ];
+    for (const selector of selectors) {
+      const imageElement = await page.$(selector);
+      if (imageElement) {
+        try {
+          const buffer2 = await imageElement.screenshot({ encoding: "base64" });
+          console.log(`[CaptchaSolver] \uC774\uBBF8\uC9C0 \uCEA1\uCC98 \uC131\uACF5: ${selector}`);
+          return buffer2;
+        } catch {
+          continue;
+        }
+      }
+    }
+    const captchaAreaSelectors = [
+      ".captcha_area",
+      '[class*="captcha"]',
+      '[class*="security"]',
+      ".verify_area"
+    ];
+    for (const selector of captchaAreaSelectors) {
+      const area = await page.$(selector);
+      if (area) {
+        try {
+          const buffer2 = await area.screenshot({ encoding: "base64" });
+          console.log(`[CaptchaSolver] \uC601\uC5ED \uCEA1\uCC98 \uC131\uACF5: ${selector}`);
+          return buffer2;
+        } catch {
+          continue;
+        }
+      }
+    }
+    console.log("[CaptchaSolver] \uC804\uCCB4 \uD398\uC774\uC9C0 \uCEA1\uCC98");
+    const buffer = await page.screenshot({ encoding: "base64" });
+    return buffer;
+  }
+  /**
+   * Claude Vision API로 답 추출
+   */
+  async askClaudeVision(imageBase64, question) {
+    const prompt = `\uC774 \uC601\uC218\uC99D \uC774\uBBF8\uC9C0\uB97C \uBCF4\uACE0 \uB2E4\uC74C \uC9C8\uBB38\uC5D0 \uB2F5\uD558\uC138\uC694.
+
+\uC9C8\uBB38: ${question}
+
+\uC601\uC218\uC99D\uC5D0\uC11C \uD574\uB2F9 \uC815\uBCF4\uB97C \uCC3E\uC544 [?] \uC704\uCE58\uC5D0 \uB4E4\uC5B4\uAC08 \uB2F5\uB9CC \uC815\uD655\uD788 \uC54C\uB824\uC8FC\uC138\uC694.
+- \uC8FC\uC18C \uAD00\uB828 \uC9C8\uBB38\uC774\uBA74: \uD574\uB2F9 \uBC88\uC9C0\uC218\uB098 \uB3C4\uB85C\uBA85 \uBC88\uD638\uB9CC \uB2F5\uD558\uC138\uC694 (\uC608: "794", "123")
+- \uC804\uD654\uBC88\uD638 \uAD00\uB828 \uC9C8\uBB38\uC774\uBA74: \uD574\uB2F9 \uC22B\uC790\uB9CC \uB2F5\uD558\uC138\uC694 (\uC608: "1234", "5678")
+- \uC0C1\uD638\uBA85 \uAD00\uB828 \uC9C8\uBB38\uC774\uBA74: \uD574\uB2F9 \uD14D\uC2A4\uD2B8\uB9CC \uB2F5\uD558\uC138\uC694
+
+\uB2E4\uB978 \uC124\uBA85 \uC5C6\uC774 \uB2F5\uB9CC \uCD9C\uB825\uD558\uC138\uC694. \uC22B\uC790\uB098 \uD14D\uC2A4\uD2B8\uB9CC \uB2F5\uD558\uC138\uC694.`;
+    const response = await this.anthropic.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 50,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: "image/png",
+                data: imageBase64
+              }
+            },
+            {
+              type: "text",
+              text: prompt
+            }
+          ]
+        }
+      ]
+    });
+    const content = response.content[0];
+    if (content.type === "text") {
+      let answer = content.text.trim();
+      answer = answer.replace(/입니다\.?$/, "").trim();
+      answer = answer.replace(/^답\s*:\s*/i, "").trim();
+      return answer;
+    }
+    throw new Error("Failed to get text response from Claude");
+  }
+  /**
+   * 답 입력 및 제출
+   */
+  async submitAnswer(page, answer) {
+    const inputSelectors = [
+      'input[type="text"]',
+      'input[placeholder*="\uC785\uB825"]',
+      'input[placeholder*="\uC815\uB2F5"]',
+      'input[name*="answer"]',
+      'input[id*="answer"]',
+      ".captcha_input input",
+      "#captcha_answer"
+    ];
+    let inputFound = false;
+    for (const selector of inputSelectors) {
+      try {
+        await page.waitForSelector(selector, { timeout: 2e3 });
+        await page.evaluate((sel) => {
+          const input = document.querySelector(sel);
+          if (input)
+            input.value = "";
+        }, selector);
+        await page.type(selector, answer, { delay: 80 });
+        inputFound = true;
+        console.log(`[CaptchaSolver] \uB2F5 \uC785\uB825 \uC644\uB8CC: ${selector}`);
+        break;
+      } catch {
+        continue;
+      }
+    }
+    if (!inputFound) {
+      throw new Error("CAPTCHA input field not found");
+    }
+    await this.delay(500);
+    const buttonSelectors = [
+      'button:has-text("\uD655\uC778")',
+      'input[type="submit"]',
+      'button[type="submit"]',
+      ".confirm_btn",
+      ".submit_btn",
+      'button[class*="confirm"]',
+      'button[class*="submit"]'
+    ];
+    for (const selector of buttonSelectors) {
+      try {
+        const button = await page.$(selector);
+        if (button) {
+          await button.click();
+          console.log(`[CaptchaSolver] \uD655\uC778 \uBC84\uD2BC \uD074\uB9AD: ${selector}`);
+          break;
+        }
+      } catch {
+        continue;
+      }
+    }
+    await page.keyboard.press("Enter");
+    await this.delay(2e3);
+  }
+  /**
+   * CAPTCHA 해결 여부 확인
+   */
+  async verifySolved(page) {
+    const stillCaptcha = await page.evaluate(() => {
+      const bodyText = document.body.innerText || "";
+      return bodyText.includes("\uBE48 \uCE78\uC744 \uCC44\uC6CC\uC8FC\uC138\uC694") || bodyText.includes("\uB2E4\uC2DC \uC785\uB825") || bodyText.includes("\uC624\uB958") || bodyText.includes("\uC601\uC218\uC99D") && bodyText.includes("[?]");
+    });
+    return !stillCaptcha;
+  }
+  delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+};
+
 // unified-runner.ts
 dotenv.config();
 var autoConfig = getConfigWithEnvOverride();
@@ -683,6 +990,30 @@ async function executeTraffic(product, searchMode, account) {
       link.click();
     }, catalogUrl);
     await sleep(4e3);
+    const hasCaptcha = await page.evaluate(() => {
+      const bodyText = document.body.innerText || "";
+      return bodyText.includes("\uBCF4\uC548 \uD655\uC778") || bodyText.includes("\uC601\uC218\uC99D") || bodyText.includes("\uBB34\uC5C7\uC785\uB2C8\uAE4C") || bodyText.includes("\uC77C\uC2DC\uC801\uC73C\uB85C \uC81C\uD55C") || bodyText.includes("[?]");
+    });
+    if (hasCaptcha) {
+      log(`[${searchMode}] \u{1F510} CAPTCHA \uAC10\uC9C0! \uC790\uB3D9 \uD574\uACB0 \uC2DC\uB3C4...`);
+      stats.captcha++;
+      try {
+        const solver = new ReceiptCaptchaSolver();
+        const solved = await solver.solve(page);
+        if (solved) {
+          log(`[${searchMode}] \u2705 CAPTCHA \uD574\uACB0 \uC131\uACF5!`);
+          await sleep(2e3);
+        } else {
+          log(`[${searchMode}] \u274C CAPTCHA \uD574\uACB0 \uC2E4\uD328`, "warn");
+          stats.failed++;
+          return false;
+        }
+      } catch (captchaError) {
+        log(`[${searchMode}] \u274C CAPTCHA \uD574\uACB0 \uC5D0\uB7EC: ${captchaError.message}`, "error");
+        stats.failed++;
+        return false;
+      }
+    }
     const finalUrl = page.url();
     const isProduct = finalUrl.includes("/catalog/") || finalUrl.includes("/products/") || finalUrl.includes("smartstore.naver.com");
     if (!isProduct) {

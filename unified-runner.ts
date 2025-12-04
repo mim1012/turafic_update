@@ -31,6 +31,7 @@ import { chromium, Page, BrowserContext, Browser } from "playwright";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
 import { getConfigWithEnvOverride, printSystemInfo, printOptimalConfig } from "./auto-optimizer";
+import { ReceiptCaptchaSolver } from "./ReceiptCaptchaSolver";
 
 // ============ 자동 최적화 설정 ============
 const autoConfig = getConfigWithEnvOverride();
@@ -334,6 +335,39 @@ async function executeTraffic(
     }, catalogUrl);
 
     await sleep(4000);
+
+    // ========== 캡챠 감지 및 해결 ==========
+    const hasCaptcha = await page.evaluate(() => {
+      const bodyText = document.body.innerText || "";
+      return bodyText.includes("보안 확인") ||
+             bodyText.includes("영수증") ||
+             bodyText.includes("무엇입니까") ||
+             bodyText.includes("일시적으로 제한") ||
+             bodyText.includes("[?]");
+    });
+
+    if (hasCaptcha) {
+      log(`[${searchMode}] 🔐 CAPTCHA 감지! 자동 해결 시도...`);
+      stats.captcha++;
+
+      try {
+        const solver = new ReceiptCaptchaSolver();
+        const solved = await solver.solve(page);
+
+        if (solved) {
+          log(`[${searchMode}] ✅ CAPTCHA 해결 성공!`);
+          await sleep(2000);
+        } else {
+          log(`[${searchMode}] ❌ CAPTCHA 해결 실패`, "warn");
+          stats.failed++;
+          return false;
+        }
+      } catch (captchaError: any) {
+        log(`[${searchMode}] ❌ CAPTCHA 해결 에러: ${captchaError.message}`, "error");
+        stats.failed++;
+        return false;
+      }
+    }
 
     const finalUrl = page.url();
     const isProduct = finalUrl.includes("/catalog/") ||
