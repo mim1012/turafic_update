@@ -1,15 +1,12 @@
 {
-  "version": "2025-12-05-007000",
-  "timestamp": 1764890000000,
-  "hash": "v7-style-prb",
+  "version": "2025-12-05-008000",
+  "timestamp": 1764900000000,
+  "hash": "unified-prb-iprotation",
   "features": [
-    "auto-optimizer",
-    "captcha-solver",
-    "pkg-compatible",
-    "slot-naver-table",
-    "prb-support",
-    "word-shuffle",
-    "multi-env-path",
-    "v7-style-captcha-0pct"
+    "prb-engine",
+    "ip-rotation",
+    "batch-execution",
+    "v7-humanized",
+    "word-shuffle"
   ]
 }
