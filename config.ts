@@ -7,7 +7,7 @@ import * as os from 'os';
 import * as fs from 'fs';
 import * as path from 'path';
 
-export type NodeType = 'experiment' | 'worker' | 'playwright';
+export type NodeType = 'experiment' | 'worker' | 'playwright' | 'prb';
 
 export interface UpdaterConfig {
   // 노드 정보

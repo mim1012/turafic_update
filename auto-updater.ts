@@ -1,12 +1,12 @@
 /**
  * TURAFIC Auto-Updater
  *
- * 1000대 PC에 한 번만 배포하면, 이후 자동으로 최신 Runner를 다운로드하고 실행합니다.
+ * 1000?� PC????번만 배포?�면, ?�후 ?�동?�로 최신 Runner�??�운로드?�고 ?�행?�니??
  *
- * 사용법:
- * 1. exe로 빌드: npx pkg updater/auto-updater.ts -t node18-win-x64 -o turafic-updater.exe
- * 2. 원격 PC에 배포: turafic-updater.exe + .env 파일
- * 3. 실행하면 자동으로 GitHub에서 최신 Runner 다운로드 후 실행
+ * ?�용�?
+ * 1. exe�?빌드: npx pkg updater/auto-updater.ts -t node18-win-x64 -o turafic-updater.exe
+ * 2. ?�격 PC??배포: turafic-updater.exe + .env ?�일
+ * 3. ?�행?�면 ?�동?�로 GitHub?�서 최신 Runner ?�운로드 ???�행
  */
 
 import * as fs from 'fs';
@@ -16,11 +16,11 @@ import * as http from 'http';
 import { spawn, ChildProcess } from 'child_process';
 import { loadConfig, printConfig, createSampleConfig, UpdaterConfig } from './config';
 
-// dotenv 로드 (있으면)
+// dotenv 로드 (?�으�?
 try {
   require('dotenv').config();
 } catch (e) {
-  // dotenv가 없어도 OK - 환경변수 직접 사용
+  // dotenv가 ?�어??OK - ?�경변??직접 ?�용
 }
 
 interface VersionInfo {
@@ -41,69 +41,67 @@ class AutoUpdater {
   }
 
   /**
-   * 메인 실행
+   * 메인 ?�행
    */
   async run(): Promise<void> {
-    console.log('\n🚀 TURAFIC Auto-Updater 시작\n');
+    console.log('\n?? TURAFIC Auto-Updater ?�작\n');
     printConfig(this.config);
 
-    // 로컬 디렉토리 생성
+    // 로컬 ?�렉?�리 ?�성
     this.ensureLocalDir();
 
-    // 첫 샘플 config 생성 (없으면)
+    // �??�플 config ?�성 (?�으�?
     if (!fs.existsSync(path.join(this.config.localDir, 'config.json'))) {
       createSampleConfig(this.config.localDir);
     }
 
-    // 시작 시 즉시 업데이트 체크
-    console.log('[Updater] 초기 업데이트 체크...');
+    // ?�작 ??즉시 ?�데?�트 체크
+    console.log('[Updater] 초기 ?�데?�트 체크...');
     await this.checkAndUpdate();
 
-    // Runner 실행
+    // Runner ?�행
     await this.startRunner();
 
-    // 주기적 업데이트 체크 (Runner 실행 중에도)
-    console.log(`[Updater] ${this.config.checkIntervalMs / 1000}초마다 업데이트 체크 시작`);
+    // 주기???�데?�트 체크 (Runner ?�행 중에??
+    console.log(`[Updater] ${this.config.checkIntervalMs / 1000}초마???�데?�트 체크 ?�작`);
     setInterval(async () => {
       await this.checkAndUpdate();
     }, this.config.checkIntervalMs);
 
-    // 프로세스 종료 핸들링
-    this.setupGracefulShutdown();
+    // ?�로?�스 종료 ?�들�?    this.setupGracefulShutdown();
   }
 
   /**
-   * 로컬 디렉토리 생성
+   * 로컬 ?�렉?�리 ?�성
    */
   private ensureLocalDir(): void {
     if (!fs.existsSync(this.config.localDir)) {
       fs.mkdirSync(this.config.localDir, { recursive: true });
-      console.log(`[Updater] 로컬 디렉토리 생성: ${this.config.localDir}`);
+      console.log(`[Updater] 로컬 ?�렉?�리 ?�성: ${this.config.localDir}`);
     }
   }
 
   /**
-   * 원격 version.json과 비교 후 업데이트
+   * ?�격 version.json�?비교 ???�데?�트
    */
   async checkAndUpdate(): Promise<boolean> {
     if (this.isUpdating) {
-      console.log('[Updater] 이미 업데이트 중...');
+      console.log('[Updater] ?��? ?�데?�트 �?..');
       return false;
     }
 
     this.isUpdating = true;
 
     try {
-      // 1. 원격 version.json 가져오기
-      const remoteVersionUrl = `${this.config.githubRawBase}/version.json`;
+      // 1. ?�격 version.json 가?�오�?      const remoteVersionUrl = `${this.config.githubRawBase}/version.json`;
       const remoteVersion = await this.fetchJson<VersionInfo>(remoteVersionUrl);
 
       if (!remoteVersion) {
-        console.log('[Updater] 원격 버전 정보 없음, 스킵');
+        console.log('[Updater] ?�격 버전 ?�보 ?�음, ?�킵');
         return false;
       }
 
-      // 2. 로컬 version.json 읽기
+      // 2. 로컬 version.json ?�기
       const localVersionPath = path.join(this.config.localDir, 'version.json');
       if (fs.existsSync(localVersionPath)) {
         try {
@@ -119,35 +117,34 @@ class AutoUpdater {
         return false;
       }
 
-      // 4. 업데이트 필요!
-      console.log(`\n[Updater] 🔄 새 버전 발견!`);
-      console.log(`  현재: ${this.localVersion?.version || '없음'}`);
+      // 4. ?�데?�트 ?�요!
+      console.log(`\n[Updater] ?�� ??버전 발견!`);
+      console.log(`  ?�재: ${this.localVersion?.version || '?�음'}`);
       console.log(`  최신: ${remoteVersion.version}\n`);
 
-      // 5. 모든 파일 다운로드
+      // 5. 모든 ?�일 ?�운로드
       for (const file of this.config.files) {
         const fileUrl = `${this.config.githubRawBase}/${file}`;
         const localPath = path.join(this.config.localDir, file);
 
-        console.log(`[Updater] 다운로드: ${file}`);
+        console.log(`[Updater] ?�운로드: ${file}`);
         await this.downloadFile(fileUrl, localPath);
       }
 
-      // 6. 로컬 버전 정보 저장
-      fs.writeFileSync(localVersionPath, JSON.stringify(remoteVersion, null, 2));
+      // 6. 로컬 버전 ?�보 ?�??      fs.writeFileSync(localVersionPath, JSON.stringify(remoteVersion, null, 2));
       this.localVersion = remoteVersion;
 
-      console.log('[Updater] ✅ 업데이트 완료!\n');
+      console.log('[Updater] ???�데?�트 ?�료!\n');
 
-      // 7. Runner 재시작 (실행 중이면)
+      // 7. Runner ?�시??(?�행 중이�?
       if (this.runnerProcess) {
-        console.log('[Updater] Runner 재시작 중...');
+        console.log('[Updater] Runner ?�시??�?..');
         await this.restartRunner();
       }
 
       return true;
     } catch (error) {
-      console.error('[Updater] 업데이트 체크 실패:', error);
+      console.error('[Updater] ?�데?�트 체크 ?�패:', error);
       return false;
     } finally {
       this.isUpdating = false;
@@ -155,16 +152,19 @@ class AutoUpdater {
   }
 
   /**
-   * Runner 시작
+   * Runner ?�작
    */
   private async startRunner(): Promise<void> {
     let runnerFile: string;
     let useNpxTsx = false;
 
-    // nodeType에 따라 실행할 파일 결정
-    if (this.config.nodeType === 'playwright') {
+    // nodeType???�라 ?�행???�일 결정
+    if (this.config.nodeType === 'prb') {
+      runnerFile = 'unified-runner.ts';
+      useNpxTsx = true;  // PRB (puppeteer-real-browser)
+    } else if (this.config.nodeType === 'playwright') {
       runnerFile = 'parallel-ip-rotation-playwright.ts';
-      useNpxTsx = true;  // TypeScript 파일은 npx tsx로 실행
+      useNpxTsx = true;  // TypeScript ?�일?� npx tsx�??�행
     } else if (this.config.nodeType === 'experiment') {
       runnerFile = 'experiment-runner.js';
     } else {
@@ -174,22 +174,22 @@ class AutoUpdater {
     const runnerPath = path.join(this.config.localDir, runnerFile);
 
     if (!fs.existsSync(runnerPath)) {
-      console.error(`[Updater] Runner 파일 없음: ${runnerPath}`);
-      console.log('[Updater] 업데이트 후 다시 시도합니다...');
+      console.error(`[Updater] Runner ?�일 ?�음: ${runnerPath}`);
+      console.log('[Updater] ?�데?�트 ???�시 ?�도?�니??..');
       await this.checkAndUpdate();
 
       if (!fs.existsSync(runnerPath)) {
-        console.error('[Updater] ❌ Runner 다운로드 실패. GitHub 레포를 확인하세요.');
+        console.error('[Updater] ??Runner ?�운로드 ?�패. GitHub ?�포�??�인?�세??');
         return;
       }
     }
 
-    console.log(`\n[Updater] 🏃 Runner 시작: ${runnerFile}`);
+    console.log(`\n[Updater] ?�� Runner ?�작: ${runnerFile}`);
     console.log(`  Node Type: ${this.config.nodeType}`);
     console.log(`  Node ID: ${this.config.nodeId}`);
     console.log(`  Executor: ${useNpxTsx ? 'npx tsx' : 'node'}\n`);
 
-    // 환경변수 전달
+    // ?�경변???�달
     const env = {
       ...process.env,
       NODE_TYPE: this.config.nodeType,
@@ -198,7 +198,7 @@ class AutoUpdater {
       SERVER_URL: this.config.serverUrl || '',
     };
 
-    // Playwright (TypeScript)는 npx tsx로 실행, 나머지는 node로 실행
+    // Playwright (TypeScript)??npx tsx�??�행, ?�머지??node�??�행
     if (useNpxTsx) {
       this.runnerProcess = spawn('npx', ['tsx', runnerPath], {
         cwd: this.config.localDir,
@@ -218,38 +218,36 @@ class AutoUpdater {
       console.log(`[Updater] Runner 종료 (code: ${code})`);
       this.runnerProcess = null;
 
-      // 비정상 종료 시 재시작
-      if (code !== 0) {
-        console.log('[Updater] 5초 후 재시작...');
+      // 비정??종료 ???�시??      if (code !== 0) {
+        console.log('[Updater] 5�????�시??..');
         setTimeout(() => this.startRunner(), 5000);
       }
     });
 
     this.runnerProcess.on('error', (error) => {
-      console.error('[Updater] Runner 실행 오류:', error);
+      console.error('[Updater] Runner ?�행 ?�류:', error);
     });
   }
 
   /**
-   * Runner 재시작
-   */
+   * Runner ?�시??   */
   private async restartRunner(): Promise<void> {
     if (this.runnerProcess) {
-      console.log('[Updater] 기존 Runner 종료 중...');
+      console.log('[Updater] 기존 Runner 종료 �?..');
 
       return new Promise((resolve) => {
         this.runnerProcess!.once('exit', () => {
-          console.log('[Updater] Runner 종료됨');
+          console.log('[Updater] Runner 종료??);
           setTimeout(async () => {
             await this.startRunner();
             resolve();
           }, 1000);
         });
 
-        // SIGTERM 전송
+        // SIGTERM ?�송
         this.runnerProcess!.kill('SIGTERM');
 
-        // 5초 후 강제 종료
+        // 5�???강제 종료
         setTimeout(() => {
           if (this.runnerProcess) {
             this.runnerProcess.kill('SIGKILL');
@@ -262,13 +260,12 @@ class AutoUpdater {
   }
 
   /**
-   * HTTP(S) JSON 가져오기
-   */
+   * HTTP(S) JSON 가?�오�?   */
   private fetchJson<T>(url: string): Promise<T | null> {
     return new Promise((resolve) => {
       const client = url.startsWith('https') ? https : http;
 
-      // 캐시 방지용 타임스탬프 추가
+      // 캐시 방�????�?�스?�프 추�?
       const urlWithCache = `${url}?t=${Date.now()}`;
 
       client.get(urlWithCache, (res) => {
@@ -291,14 +288,14 @@ class AutoUpdater {
   }
 
   /**
-   * 파일 다운로드
+   * ?�일 ?�운로드
    */
   private downloadFile(url: string, dest: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const client = url.startsWith('https') ? https : http;
       const urlWithCache = `${url}?t=${Date.now()}`;
 
-      // 임시 파일로 다운로드
+      // ?�시 ?�일�??�운로드
       const tmpPath = `${dest}.tmp`;
       const dir = path.dirname(dest);
 
@@ -319,7 +316,7 @@ class AutoUpdater {
         res.pipe(file);
         file.on('finish', () => {
           file.close();
-          // 기존 파일 백업 후 교체
+          // 기존 ?�일 백업 ??교체
           if (fs.existsSync(dest)) {
             const backupPath = `${dest}.bak`;
             fs.copyFileSync(dest, backupPath);
@@ -336,11 +333,11 @@ class AutoUpdater {
   }
 
   /**
-   * 정상 종료 처리
+   * ?�상 종료 처리
    */
   private setupGracefulShutdown(): void {
     const shutdown = () => {
-      console.log('\n[Updater] 종료 중...');
+      console.log('\n[Updater] 종료 �?..');
       if (this.runnerProcess) {
         this.runnerProcess.kill('SIGTERM');
       }
@@ -352,9 +349,10 @@ class AutoUpdater {
   }
 }
 
-// 메인 실행
+// 메인 ?�행
 const updater = new AutoUpdater();
 updater.run().catch((error) => {
-  console.error('[Updater] 치명적 오류:', error);
+  console.error('[Updater] 치명???�류:', error);
   process.exit(1);
 });
+

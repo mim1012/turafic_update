@@ -1,14 +1,16 @@
 {
-  "nodeType": "playwright",
+  "nodeType": "prb",
   "nodeId": "worker-pc-001",
   "databaseUrl": "",
-  "localDir": "C:\\turafic",
+  "localDir": "C:\turafic",
   "githubRawBase": "https://raw.githubusercontent.com/mim1012/turafic_update/main",
   "checkIntervalMs": 180000,
   "files": [
-    "parallel-ip-rotation-playwright.ts",
-    "playwright-save-login.ts",
-    "playwright-real-traffic.ts",
+    "unified-runner.ts",
+    "engines/v7_engine.ts",
+    "runner/types.ts",
+    "ipRotation.ts",
+    "profiles/pc_v7.json",
     "version.json"
   ]
 }
