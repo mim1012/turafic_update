@@ -83,11 +83,16 @@ async function claimWorkItem(): Promise<WorkItem | null> {
   isClaimingTask = true;
 
   try {
-    // 1. 작업 1개 가져오기
+    // 1. 유효한 작업 찾기 (mid, product_name 있는 것만)
     const { data: tasks, error: taskError } = await supabase
       .from("traffic_navershopping")
-      .select("id, slot_id, keyword, link_url")
+      .select(`
+        id, slot_id, keyword, link_url,
+        slot_naver!inner(mid, product_name)
+      `)
       .eq("slot_type", "네이버쇼핑")
+      .not("slot_naver.mid", "is", null)
+      .not("slot_naver.product_name", "is", null)
       .order("id", { ascending: true })
       .limit(1);
 
@@ -101,6 +106,7 @@ async function claimWorkItem(): Promise<WorkItem | null> {
     }
 
     const task = tasks[0];
+    const slot = (task as any).slot_naver;
 
     // 2. 즉시 삭제 (다른 워커가 가져가지 못하게)
     const { error: deleteError } = await supabase
@@ -113,18 +119,6 @@ async function claimWorkItem(): Promise<WorkItem | null> {
       return null;
     }
 
-    // 3. slot_naver에서 mid, product_name 조회
-    const { data: slot } = await supabase
-      .from("slot_naver")
-      .select("mid, product_name")
-      .eq("id", task.slot_id)
-      .single();
-
-    if (!slot || !slot.mid || !slot.product_name) {
-      console.error('[SLOT ERROR] mid or product_name is null');
-      return null;
-    }
-
     return {
       taskId: task.id,
       slotId: task.slot_id,
@@ -133,6 +127,9 @@ async function claimWorkItem(): Promise<WorkItem | null> {
       mid: slot.mid,
       linkUrl: task.link_url
     };
+  } catch (e: any) {
+    console.error('[CLAIM ERROR]', e.message);
+    return null;
   } finally {
     isClaimingTask = false;
   }
