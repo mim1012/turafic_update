@@ -1,13 +1,12 @@
 /**
- * Production Runner - traffic_navershopping 기반 작업 실행
+ * Production Runner - 병렬 브라우저 풀 기반 작업 실행
  *
  * 실행: npx tsx runner/production-runner.ts
  *
  * 워크플로우:
- * 1. traffic_navershopping에서 작업 가져오기 (slot_type='네이버쇼핑', customer_id!='master')
- * 2. slot_id로 slot_naver 매칭하여 mid, product_name 획득
- * 3. V7 엔진으로 트래픽 실행
- * 4. 완료된 작업 traffic_navershopping에서 삭제
+ * 1. N개 브라우저를 병렬로 실행
+ * 2. 각 브라우저가 traffic_navershopping에서 작업 1개씩 가져가서 실행
+ * 3. 완료 후 삭제하고 다음 작업 가져감
  */
 
 import * as dotenv from "dotenv";
@@ -31,13 +30,13 @@ import { connect } from "puppeteer-real-browser";
 import type { Page, Browser } from "puppeteer-core";
 import { createClient } from "@supabase/supabase-js";
 import { runV7Engine } from "../engines/v7_engine";
-import type { Product, Profile, RunContext, TestResult } from "./types";
+import type { Product, Profile, RunContext } from "./types";
 
 // ============ 설정 ============
-const BATCH_SIZE = 10;          // 배치당 작업 수
+const PARALLEL_BROWSERS = 5;    // 동시 실행 브라우저 수
 const BATCH_REST = 60 * 1000;   // 배치 간 휴식 (60초)
-const TASK_REST = 5 * 1000;     // 작업 간 휴식 (5초)
-const EMPTY_WAIT = 30 * 1000;   // 작업 없을 때 대기 (30초)
+const EMPTY_WAIT = 10 * 1000;   // 작업 없을 때 대기 (10초)
+const BROWSER_RESTART_EVERY = 10; // N회마다 브라우저 재시작
 
 const SUPABASE_URL = process.env.SUPABASE_PRODUCTION_URL!;
 const SUPABASE_KEY = process.env.SUPABASE_PRODUCTION_KEY!;
@@ -46,27 +45,16 @@ const SUPABASE_KEY = process.env.SUPABASE_PRODUCTION_KEY!;
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ============ 타입 정의 ============
-interface TrafficTask {
-  id: number;
-  slot_type: string;
-  keyword: string;
-  link_url: string;
-  slot_count: number;
-  slot_sequence: number;
-  customer_id: string;
-  slot_id: number;
-}
-
 interface WorkItem {
-  taskId: number;           // traffic_navershopping.id (삭제용)
-  slotId: number;           // slot_naver.id
+  taskId: number;
+  slotId: number;
   keyword: string;
   productName: string;
   mid: string;
   linkUrl: string;
 }
 
-// ============ 통계 ============
+// ============ 전역 통계 ============
 let totalRuns = 0;
 let totalSuccess = 0;
 let totalCaptcha = 0;
@@ -74,14 +62,8 @@ let totalFailed = 0;
 let totalDeleted = 0;
 let sessionStartTime = Date.now();
 
-// ============ 로그 시스템 ============
-function createLogger(): (event: string, data?: any) => void {
-  return (event: string, data?: any) => {
-    const time = new Date().toISOString().substring(11, 19);
-    const dataStr = data ? ` ${JSON.stringify(data)}` : '';
-    console.log(`  [${time}] ${event}${dataStr}`);
-  };
-}
+// ============ 작업 락 (중복 방지) ============
+const lockedTaskIds = new Set<number>();
 
 // ============ 프로필 로드 ============
 function loadProfile(profileName: string): Profile {
@@ -90,71 +72,61 @@ function loadProfile(profileName: string): Profile {
   return JSON.parse(content);
 }
 
-// ============ 작업 가져오기 (traffic_navershopping → slot_naver 매칭) ============
-async function fetchWorkItems(count: number): Promise<WorkItem[]> {
-  // 1. traffic_navershopping에서 작업 가져오기
-  // - slot_type = '네이버쇼핑'
-  // - customer_id != 'master' (일반 회원만)
+// ============ 작업 1개 가져오기 (락 처리) ============
+async function fetchOneWorkItem(): Promise<WorkItem | null> {
+  // traffic_navershopping에서 1개 가져오기
   const { data: tasks, error: taskError } = await supabase
     .from("traffic_navershopping")
     .select("id, slot_type, keyword, link_url, slot_count, slot_sequence, customer_id, slot_id")
     .eq("slot_type", "네이버쇼핑")
     .neq("customer_id", "master")
-    .limit(count);
+    .limit(20);  // 여러개 가져와서 락 안 걸린 것 선택
 
-  if (taskError) {
-    console.error("[ERROR] Failed to fetch tasks:", taskError.message);
-    return [];
+  if (taskError || !tasks || tasks.length === 0) {
+    return null;
   }
 
-  if (!tasks || tasks.length === 0) {
-    return [];
-  }
+  // 락 안 걸린 작업 찾기
+  for (const task of tasks) {
+    if (lockedTaskIds.has(task.id)) continue;
 
-  console.log(`[FETCH] ${tasks.length}개 작업 조회됨`);
-
-  // 2. 각 작업에 대해 slot_naver에서 mid, product_name 매칭
-  const workItems: WorkItem[] = [];
-
-  for (const task of tasks as TrafficTask[]) {
-    const { data: slot, error: slotError } = await supabase
+    // slot_naver에서 mid, product_name 매칭
+    const { data: slot } = await supabase
       .from("slot_naver")
       .select("id, mid, product_name")
       .eq("id", task.slot_id)
       .single();
 
-    if (slotError || !slot) {
-      console.log(`[WARN] slot_id ${task.slot_id} 매칭 실패, 건너뜀`);
-      continue;
-    }
+    if (!slot || !slot.mid || !slot.product_name) continue;
 
-    if (!slot.mid || !slot.product_name) {
-      console.log(`[WARN] slot_id ${task.slot_id} mid/product_name 없음, 건너뜀`);
-      continue;
-    }
+    // 락 걸기
+    lockedTaskIds.add(task.id);
 
-    workItems.push({
+    return {
       taskId: task.id,
       slotId: task.slot_id,
       keyword: task.keyword,
       productName: slot.product_name,
       mid: slot.mid,
       linkUrl: task.link_url
-    });
+    };
   }
 
-  return workItems;
+  return null;
 }
 
-// ============ 작업 삭제 (완료 후) ============
+// ============ 작업 삭제 ============
 async function deleteTask(taskId: number): Promise<boolean> {
   const { error } = await supabase
     .from("traffic_navershopping")
     .delete()
     .eq("id", taskId);
 
+  // 락 해제
+  lockedTaskIds.delete(taskId);
+
   if (error) {
-    console.error(`[ERROR] 작업 삭제 실패 (id=${taskId}):`, error.message);
+    console.error(`[ERROR] 삭제 실패 (id=${taskId}):`, error.message);
     return false;
   }
 
@@ -162,11 +134,9 @@ async function deleteTask(taskId: number): Promise<boolean> {
   return true;
 }
 
-// ============ slot_naver 성공/실패 카운트 업데이트 ============
+// ============ slot_naver 통계 업데이트 ============
 async function updateSlotStats(slotId: number, success: boolean): Promise<void> {
   const column = success ? "success_count" : "fail_count";
-
-  // RPC 호출 대신 직접 업데이트 (increment)
   const { data: current } = await supabase
     .from("slot_naver")
     .select(column)
@@ -182,199 +152,147 @@ async function updateSlotStats(slotId: number, success: boolean): Promise<void> 
   }
 }
 
-// ============ 단일 작업 실행 ============
-async function runSingleTask(
-  work: WorkItem,
-  index: number,
-  profile: Profile
-): Promise<TestResult & { taskId: number }> {
+// ============ 브라우저 워커 ============
+async function browserWorker(workerId: number, profile: Profile): Promise<void> {
+  let taskCount = 0;
   let browser: Browser | null = null;
+  let page: Page | null = null;
 
-  const result: TestResult & { taskId: number } = {
-    taskId: work.taskId,
-    index,
-    product: work.productName.substring(0, 30),
-    mid: work.mid,
-    success: false,
-    captchaDetected: false,
-    midMatched: false,
-    productPageEntered: false,
-    duration: 0
+  const log = (msg: string) => {
+    const time = new Date().toISOString().substring(11, 19);
+    console.log(`[${time}] [Worker ${workerId}] ${msg}`);
   };
 
-  try {
-    // PRB 브라우저 시작
-    const response = await connect({
-      headless: profile.prb_options?.headless ?? false,
-      turnstile: profile.prb_options?.turnstile ?? true,
-    });
+  while (true) {
+    try {
+      // 브라우저 시작/재시작
+      if (!browser || taskCount >= BROWSER_RESTART_EVERY) {
+        if (browser) {
+          await browser.close().catch(() => {});
+          log(`브라우저 재시작 (${taskCount}회 완료)`);
+        }
 
-    browser = response.browser as Browser;
-    const page = response.page as Page;
+        const response = await connect({
+          headless: profile.prb_options?.headless ?? false,
+          turnstile: profile.prb_options?.turnstile ?? true,
+        });
 
-    page.setDefaultTimeout(30000);
-    page.setDefaultNavigationTimeout(30000);
+        browser = response.browser as Browser;
+        page = response.page as Page;
+        page.setDefaultTimeout(30000);
+        page.setDefaultNavigationTimeout(30000);
+        taskCount = 0;
 
-    // Context 생성
-    const ctx: RunContext = {
-      log: createLogger(),
-      profile,
-      login: false
-    };
+        log("브라우저 시작됨");
+      }
 
-    // Product 객체 생성
-    const product: Product = {
-      id: work.slotId,
-      keyword: work.keyword,
-      product_name: work.productName,
-      mid: work.mid
-    };
+      // 작업 가져오기
+      const work = await fetchOneWorkItem();
 
-    // V7 엔진 실행
-    const engineResult = await runV7Engine(page, browser, product, ctx);
+      if (!work) {
+        log("대기 중인 작업 없음...");
+        await new Promise(r => setTimeout(r, EMPTY_WAIT));
+        continue;
+      }
 
-    // 결과 복사
-    result.success = engineResult.success;
-    result.captchaDetected = engineResult.captchaDetected;
-    result.midMatched = engineResult.midMatched;
-    result.productPageEntered = engineResult.productPageEntered;
-    result.duration = engineResult.duration;
-    result.error = engineResult.error;
+      totalRuns++;
+      taskCount++;
+      const startTime = Date.now();
 
-  } catch (e: any) {
-    result.error = e.message;
-  } finally {
-    if (browser) await browser.close().catch(() => {});
+      log(`작업 시작: ${work.productName.substring(0, 30)}... (task=${work.taskId})`);
+
+      // Context 생성
+      const ctx: RunContext = {
+        log: (event: string) => log(`  ${event}`),
+        profile,
+        login: false
+      };
+
+      // Product 객체
+      const product: Product = {
+        id: work.slotId,
+        keyword: work.keyword,
+        product_name: work.productName,
+        mid: work.mid
+      };
+
+      // V7 엔진 실행
+      const result = await runV7Engine(page!, browser!, product, ctx);
+      const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+
+      // 결과 처리
+      if (result.productPageEntered) {
+        totalSuccess++;
+        log(`SUCCESS | ${duration}s`);
+        await updateSlotStats(work.slotId, true);
+      } else if (result.captchaDetected) {
+        totalCaptcha++;
+        log(`CAPTCHA | ${duration}s`);
+        await updateSlotStats(work.slotId, false);
+      } else {
+        totalFailed++;
+        log(`FAILED: ${result.error} | ${duration}s`);
+        await updateSlotStats(work.slotId, false);
+      }
+
+      // 작업 삭제
+      await deleteTask(work.taskId);
+
+    } catch (e: any) {
+      log(`ERROR: ${e.message}`);
+      // 브라우저 에러 시 재시작
+      if (browser) {
+        await browser.close().catch(() => {});
+        browser = null;
+        page = null;
+      }
+      await new Promise(r => setTimeout(r, 5000));
+    }
   }
-
-  return result;
 }
 
-// ============ 배치 실행 ============
-async function runBatch(batchNum: number, profile: Profile): Promise<void> {
-  console.log(`\n${"=".repeat(50)}`);
-  console.log(`  배치 #${batchNum} 시작`);
-  console.log(`${"=".repeat(50)}`);
-
-  const workItems = await fetchWorkItems(BATCH_SIZE);
-
-  if (workItems.length === 0) {
-    console.log(`[INFO] 대기 중인 작업 없음. ${EMPTY_WAIT / 1000}초 후 재시도...`);
-    await new Promise(r => setTimeout(r, EMPTY_WAIT));
-    return;
-  }
-
-  console.log(`[INFO] ${workItems.length}개 작업 로드됨\n`);
-
-  let batchSuccess = 0;
-  let batchCaptcha = 0;
-  let batchDeleted = 0;
-
-  for (let i = 0; i < workItems.length; i++) {
-    const work = workItems[i];
-    totalRuns++;
-
-    console.log(`[${totalRuns}] ${work.productName.substring(0, 40)}... (task=${work.taskId})`);
-
-    const result = await runSingleTask(work, i + 1, profile);
-
-    // 결과 처리
-    if (result.productPageEntered) {
-      totalSuccess++;
-      batchSuccess++;
-      console.log(`  => SUCCESS | ${(result.duration / 1000).toFixed(1)}s`);
-      await updateSlotStats(work.slotId, true);
-    } else if (result.captchaDetected) {
-      totalCaptcha++;
-      batchCaptcha++;
-      console.log(`  => CAPTCHA | ${(result.duration / 1000).toFixed(1)}s`);
-      await updateSlotStats(work.slotId, false);
-    } else {
-      totalFailed++;
-      console.log(`  => FAILED: ${result.error} | ${(result.duration / 1000).toFixed(1)}s`);
-      await updateSlotStats(work.slotId, false);
-    }
-
-    // 작업 완료 후 무조건 삭제
-    const deleted = await deleteTask(work.taskId);
-    if (deleted) {
-      batchDeleted++;
-      console.log(`  => DELETED task ${work.taskId}`);
-    }
-
-    // 작업 간 휴식
-    if (i < workItems.length - 1) {
-      await new Promise(r => setTimeout(r, TASK_REST));
-    }
-  }
-
-  // 배치 통계
-  const successRate = (batchSuccess / workItems.length * 100).toFixed(0);
-  const captchaRate = (batchCaptcha / workItems.length * 100).toFixed(0);
-
-  console.log(`\n[배치 #${batchNum} 완료]`);
-  console.log(`  성공: ${batchSuccess}/${workItems.length} (${successRate}%)`);
-  console.log(`  CAPTCHA: ${batchCaptcha} (${captchaRate}%)`);
-  console.log(`  삭제: ${batchDeleted}개`);
-}
-
-// ============ 전체 통계 출력 ============
+// ============ 통계 출력 ============
 function printStats(): void {
-  const elapsed = (Date.now() - sessionStartTime) / 1000 / 60; // 분
+  const elapsed = (Date.now() - sessionStartTime) / 1000 / 60;
   const successRate = totalRuns > 0 ? (totalSuccess / totalRuns * 100).toFixed(1) : '0';
   const captchaRate = totalRuns > 0 ? (totalCaptcha / totalRuns * 100).toFixed(1) : '0';
 
-  console.log(`\n${"=".repeat(50)}`);
-  console.log(`  전체 통계 (${elapsed.toFixed(1)}분 경과)`);
-  console.log(`${"=".repeat(50)}`);
-  console.log(`  총 실행: ${totalRuns}회`);
-  console.log(`  성공: ${totalSuccess}회 (${successRate}%)`);
-  console.log(`  CAPTCHA: ${totalCaptcha}회 (${captchaRate}%)`);
-  console.log(`  실패: ${totalFailed}회`);
-  console.log(`  삭제된 작업: ${totalDeleted}개`);
-  console.log(`  처리 속도: ${(totalRuns / elapsed).toFixed(1)}회/분`);
-  console.log(`${"=".repeat(50)}\n`);
+  console.log(`\n${"=".repeat(60)}`);
+  console.log(`  통계 (${elapsed.toFixed(1)}분 경과)`);
+  console.log(`${"=".repeat(60)}`);
+  console.log(`  총 실행: ${totalRuns}회 | 성공: ${totalSuccess} (${successRate}%)`);
+  console.log(`  CAPTCHA: ${totalCaptcha} (${captchaRate}%) | 실패: ${totalFailed}`);
+  console.log(`  삭제: ${totalDeleted}개 | 속도: ${(totalRuns / elapsed).toFixed(1)}회/분`);
+  console.log(`${"=".repeat(60)}\n`);
 }
 
-// ============ 메인 루프 ============
+// ============ 메인 ============
 async function main() {
-  console.log(`${"=".repeat(50)}`);
-  console.log(`  Production Runner (traffic_navershopping 기반)`);
-  console.log(`${"=".repeat(50)}`);
-  console.log(`  배치 크기: ${BATCH_SIZE}`);
-  console.log(`  배치 휴식: ${BATCH_REST / 1000}초`);
-  console.log(`  작업 휴식: ${TASK_REST / 1000}초`);
+  console.log(`${"=".repeat(60)}`);
+  console.log(`  Production Runner (병렬 브라우저 풀)`);
+  console.log(`${"=".repeat(60)}`);
+  console.log(`  동시 브라우저: ${PARALLEL_BROWSERS}개`);
+  console.log(`  브라우저 재시작: ${BROWSER_RESTART_EVERY}회마다`);
   console.log(`  필터: slot_type='네이버쇼핑', customer_id!='master'`);
-  console.log(`${"=".repeat(50)}`);
+  console.log(`${"=".repeat(60)}`);
 
-  // 프로필 로드
   const profile = loadProfile("pc_v7");
-  console.log(`\n[Profile] ${profile.name}`);
+  console.log(`\n[Profile] ${profile.name}\n`);
 
-  let batchNum = 0;
+  // 통계 출력 인터벌
+  setInterval(printStats, 60000);
 
-  // 무한 루프
-  while (true) {
-    batchNum++;
-
-    try {
-      await runBatch(batchNum, profile);
-    } catch (e: any) {
-      console.error(`[ERROR] 배치 실행 오류: ${e.message}`);
-    }
-
-    // 10배치마다 전체 통계 출력
-    if (batchNum % 10 === 0) {
-      printStats();
-    }
-
-    // 배치 간 휴식
-    console.log(`\n[REST] ${BATCH_REST / 1000}초 휴식...`);
-    await new Promise(r => setTimeout(r, BATCH_REST));
+  // 병렬 워커 시작
+  const workers = [];
+  for (let i = 1; i <= PARALLEL_BROWSERS; i++) {
+    workers.push(browserWorker(i, profile));
   }
+
+  // 모든 워커 실행 (무한 루프)
+  await Promise.all(workers);
 }
 
-// 종료 시그널 처리
+// 종료 시그널
 process.on('SIGINT', () => {
   console.log('\n\n[STOP] 종료 요청됨');
   printStats();
