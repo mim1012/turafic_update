@@ -1,12 +1,13 @@
 {
-  "version": "2025-12-05-008000",
-  "timestamp": 1764900000000,
-  "hash": "unified-prb-iprotation",
+  "version": "2025-12-05-009000",
+  "timestamp": 1764910000000,
+  "hash": "db-config-auto",
   "features": [
     "prb-engine",
     "ip-rotation",
     "batch-execution",
     "v7-humanized",
-    "word-shuffle"
+    "word-shuffle",
+    "db-nodeType-auto"
   ]
 }
