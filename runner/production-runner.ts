@@ -283,29 +283,23 @@ async function runBatch(batchNum: number, profile: Profile): Promise<void> {
       totalSuccess++;
       batchSuccess++;
       console.log(`  => SUCCESS | ${(result.duration / 1000).toFixed(1)}s`);
-
-      // 성공 시 작업 삭제 및 통계 업데이트
-      const deleted = await deleteTask(work.taskId);
-      if (deleted) {
-        batchDeleted++;
-        console.log(`  => DELETED task ${work.taskId}`);
-      }
       await updateSlotStats(work.slotId, true);
-
     } else if (result.captchaDetected) {
       totalCaptcha++;
       batchCaptcha++;
       console.log(`  => CAPTCHA | ${(result.duration / 1000).toFixed(1)}s`);
-
-      // CAPTCHA는 실패로 처리하지만 삭제하지 않음 (재시도 가능)
       await updateSlotStats(work.slotId, false);
-
     } else {
       totalFailed++;
       console.log(`  => FAILED: ${result.error} | ${(result.duration / 1000).toFixed(1)}s`);
-
-      // 실패 시에도 삭제하지 않음 (재시도 가능)
       await updateSlotStats(work.slotId, false);
+    }
+
+    // 작업 완료 후 무조건 삭제
+    const deleted = await deleteTask(work.taskId);
+    if (deleted) {
+      batchDeleted++;
+      console.log(`  => DELETED task ${work.taskId}`);
     }
 
     // 작업 간 휴식
