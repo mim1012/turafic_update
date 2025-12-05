@@ -18,9 +18,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
 }
 
-// 35~220ms 랜덤 딜레이
+// 30~60ms 랜덤 딜레이 (빠른 타이핑)
 function randomKeyDelay(): number {
-  return 35 + Math.random() * 185;
+  return 30 + Math.random() * 30;
 }
 
 // 랜덤 범위
@@ -46,11 +46,9 @@ function shuffleWords(productName: string): string {
 // ============ 인간화 함수들 ============
 
 /**
- * 1) 인간화 타이핑
- * - keydown → 35~220ms 랜덤 delay
- * - occasional typo → backspace → 다시 입력
+ * 1) 빠른 타이핑 (30~60ms)
+ * - 오타 시뮬레이션 제거
  * - focus() 후 250~600ms 기다리기
- * - paste 금지
  */
 async function humanizedType(page: Page, selector: string, text: string, ctx: RunContext): Promise<void> {
   ctx.log("human:type", { length: text.length });
@@ -59,30 +57,15 @@ async function humanizedType(page: Page, selector: string, text: string, ctx: Ru
   await page.click(selector);
   await sleep(randomBetween(250, 600));
 
-  for (let i = 0; i < text.length; i++) {
-    const char = text[i];
-
-    // 10% 확률로 오타 발생
-    if (Math.random() < 0.1 && i > 0) {
-      // 랜덤 오타 입력
-      const typoChar = String.fromCharCode(97 + Math.floor(Math.random() * 26));
-      await page.keyboard.type(typoChar, { delay: randomKeyDelay() });
-      await sleep(randomBetween(100, 300));
-      // 백스페이스로 삭제
-      await page.keyboard.press('Backspace');
-      await sleep(randomBetween(50, 150));
-    }
-
-    // 실제 문자 입력 (keydown 딜레이)
+  // 빠른 타이핑 (오타 없이)
+  for (const char of text) {
     await page.keyboard.type(char, { delay: randomKeyDelay() });
   }
 }
 
 /**
- * 2) 인간화 마우스 클릭
- * - mouse.move(x, y, { steps }) 사용
- * - mouse.down() → mouse.up() 분리
- * - isTrusted = true 이벤트 생성
+ * 2) 마우스 클릭 (단순화)
+ * - mouse.click() 사용 (down/up 분리 제거)
  */
 async function humanizedClick(page: Page, selector: string, ctx: RunContext): Promise<void> {
   ctx.log("human:click", { selector: selector.substring(0, 30) });
@@ -101,30 +84,18 @@ async function humanizedClick(page: Page, selector: string, ctx: RunContext): Pr
   const targetX = box.x + box.width / 2 + randomBetween(-5, 5);
   const targetY = box.y + box.height / 2 + randomBetween(-3, 3);
 
-  // 현재 마우스 위치에서 목표로 이동 (steps로 부드럽게)
-  const currentPos = await page.evaluate(() => ({ x: 0, y: 0 }));
-
-  // 중간 경유점 추가 (더 자연스러운 곡선)
-  const midX = (currentPos.x + targetX) / 2 + randomBetween(-20, 20);
-  const midY = (currentPos.y + targetY) / 2 + randomBetween(-10, 10);
-
-  await page.mouse.move(midX, midY, { steps: Math.floor(randomBetween(10, 15)) });
-  await sleep(randomBetween(30, 80));
+  // 마우스 이동 후 클릭 (단순화)
   await page.mouse.move(targetX, targetY, { steps: Math.floor(randomBetween(8, 12)) });
+  await sleep(randomBetween(30, 80));
 
-  // 클릭 전 잠시 대기
-  await sleep(randomBetween(50, 150));
-
-  // down/up 분리 (isTrusted = true)
-  await page.mouse.down();
-  await sleep(randomBetween(50, 120));
-  await page.mouse.up();
+  // mouse.click() 사용 (down/up 분리 제거)
+  await page.mouse.click(targetX, targetY, { delay: randomBetween(30, 60) });
 }
 
 /**
- * 3) 인간화 요소 클릭 (좌표 기반)
+ * 3) 요소 클릭 (단순화)
  * - 요소를 먼저 뷰포트에 스크롤
- * - 그 후 마우스 이동 + down/up
+ * - mouse.click() 사용
  */
 async function humanizedClickElement(page: Page, element: any, ctx: RunContext): Promise<void> {
   // 1. 먼저 요소를 뷰포트로 스크롤
@@ -152,14 +123,12 @@ async function humanizedClickElement(page: Page, element: any, ctx: RunContext):
 
   ctx.log("human:click:coords", { x: Math.round(targetX), y: Math.round(targetY) });
 
-  // 3. 마우스 이동
-  await page.mouse.move(targetX, targetY, { steps: Math.floor(randomBetween(12, 18)) });
-  await sleep(randomBetween(100, 200));
+  // 3. 마우스 이동 후 클릭 (단순화)
+  await page.mouse.move(targetX, targetY, { steps: Math.floor(randomBetween(8, 12)) });
+  await sleep(randomBetween(50, 100));
 
-  // 4. down/up (isTrusted = true)
-  await page.mouse.down();
-  await sleep(randomBetween(60, 140));
-  await page.mouse.up();
+  // mouse.click() 사용 (down/up 분리 제거)
+  await page.mouse.click(targetX, targetY, { delay: randomBetween(30, 60) });
 }
 
 // ============ 메인 엔진 ============
@@ -224,13 +193,11 @@ export async function runV7Engine(
       return result;
     }
 
-    // 4. 인간화 스크롤 (3번)
+    // 4. 스크롤 (3번) - 일반 scrollBy 사용
     ctx.log("behavior:scroll", { times: 3, amount: 400 });
     for (let s = 0; s < 3; s++) {
-      // 스크롤도 부드럽게
-      await page.evaluate(() => {
-        window.scrollBy({ top: 400, behavior: 'smooth' });
-      });
+      const scrollAmount = 300 + Math.random() * 200;
+      await page.evaluate((amt) => window.scrollBy(0, amt), scrollAmount);
       await sleep(randomBetween(400, 700));
     }
 
