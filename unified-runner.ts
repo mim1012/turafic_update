@@ -1,737 +1,421 @@
 /**
- * Unified Traffic Runner
+ * Unified Runner - PRB 엔진 + IP 로테이션 + 배치 실행
  *
- * 주의: pkg 빌드 호환성을 위해 shebang(#!/usr/bin/env npx tsx) 제거됨
- * 로컬 실행: npx tsx unified-runner.ts
+ * 실행: npx tsx unified-runner.ts
  *
- * 4개 모드 지원:
- * - 통검 로그인 (tonggum_login)
- * - 통검 비로그인 (tonggum_nologin)
- * - 쇼검 로그인 (shogum_login)
- * - 쇼검 비로그인 (shogum_nologin)
- *
- * 데이터 소스:
- * - navertrafictest: traffic_mode_settings, workerNodes
- * - adpang_production: traffic_navershopping, slot_type_settings
- *
- * 환경변수:
- *   - NODE_ID: 워커 식별자 (필수)
- *   - SUPABASE_CONTROL_URL: navertrafictest URL
- *   - SUPABASE_CONTROL_KEY: navertrafictest KEY
- *   - SUPABASE_PRODUCTION_URL: adpang_production URL
- *   - SUPABASE_PRODUCTION_KEY: adpang_production KEY
- *   - ANTHROPIC_API_KEY: CAPTCHA 해결용
+ * 워크플로우:
+ * 1. 테더링 어댑터 감지 + 현재 IP 확인
+ * 2. 5개 브라우저 동시 실행 (각각 작업 1개씩)
+ * 3. 모두 완료 대기
+ * 4. IP 로테이션 (테더링 껐다켜기)
+ * 5. 다음 배치로 반복
  */
 
 import * as dotenv from "dotenv";
 import * as path from "path";
+import * as fs from "fs";
 
-// .env 파일을 스크립트 위치 또는 현재 디렉토리에서 찾기
+// .env 로드
 const envPaths = [
   path.join(process.cwd(), '.env'),
   path.join(__dirname, '.env'),
-  'C:\\turafic\\.env',  // 기본 설치 경로
+  'C:\\turafic\\.env',
 ];
-
-let envLoaded = false;
 for (const envPath of envPaths) {
   const result = dotenv.config({ path: envPath });
   if (!result.error) {
     console.log(`[ENV] Loaded from: ${envPath}`);
-    envLoaded = true;
     break;
   }
 }
 
-if (!envLoaded) {
-  console.log(`[ENV] Warning: .env not found in: ${envPaths.join(', ')}`);
-}
-
-import os from "os";
-import * as fs from "fs";
-import { chromium, Page as PlaywrightPage, BrowserContext, Browser } from "playwright";
 import { connect } from "puppeteer-real-browser";
-import type { Page as PuppeteerPage, Browser as PuppeteerBrowser } from "puppeteer";
-import { createClient, SupabaseClient } from "@supabase/supabase-js";
-import Anthropic from "@anthropic-ai/sdk";
-import { getConfigWithEnvOverride, printSystemInfo, printOptimalConfig } from "./auto-optimizer";
-import { ReceiptCaptchaSolver } from "./ReceiptCaptchaSolver";
+import type { Page, Browser } from "puppeteer-core";
+import { createClient } from "@supabase/supabase-js";
+import { runV7Engine } from "./engines/v7_engine";
+import { rotateIP, getCurrentIP, getTetheringAdapter } from "./ipRotation";
 
-// 브라우저 타입 선택: "playwright" | "prb"
-const BROWSER_TYPE = process.env.BROWSER_TYPE || "playwright";
+// ============ 설정 ============
+const PARALLEL_BROWSERS = 5;    // 동시 실행 브라우저 수
+const BATCH_REST = 5 * 1000;    // 배치 간 휴식 (5초)
+const EMPTY_WAIT = 10 * 1000;   // 작업 없을 때 대기 (10초)
+const IP_ROTATION_ENABLED = true; // IP 로테이션 활성화
 
-// ============ 브라우저 호환 헬퍼 ============
-async function pageType(page: any, selector: string, text: string): Promise<void> {
-  if (BROWSER_TYPE === "prb") {
-    await page.type(selector, text, { delay: 50 + Math.random() * 100 });
-  } else {
-    await page.fill(selector, text);
-  }
-}
+const SUPABASE_URL = process.env.SUPABASE_PRODUCTION_URL!;
+const SUPABASE_KEY = process.env.SUPABASE_PRODUCTION_KEY!;
 
-async function pagePress(page: any, selector: string, key: string): Promise<void> {
-  if (BROWSER_TYPE === "prb") {
-    await page.keyboard.press(key);
-  } else {
-    await page.press(selector, key);
-  }
-}
+// ============ Supabase 클라이언트 ============
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-async function pageWaitLoad(page: any): Promise<void> {
-  if (BROWSER_TYPE === "prb") {
-    await page.waitForNavigation({ waitUntil: "domcontentloaded" }).catch(() => {});
-  } else {
-    await page.waitForLoadState("domcontentloaded");
-  }
-}
-
-// ============ 상품명 단어 셔플 ============
-function shuffleWords(productName: string): string {
-  // 특수문자/괄호 제거하고 단어 분리
-  const cleaned = productName
-    .replace(/[\[\](){}]/g, ' ')  // 괄호 제거
-    .replace(/[^\w\sㄱ-ㅎㅏ-ㅣ가-힣]/g, ' ')  // 특수문자 제거
-    .trim();
-
-  const words = cleaned.split(/\s+/).filter(w => w.length > 0);
-
-  if (words.length <= 1) return cleaned;
-
-  // Fisher-Yates 셔플
-  for (let i = words.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [words[i], words[j]] = [words[j], words[i]];
-  }
-
-  return words.join(' ');
-}
-
-// ============ 자동 최적화 설정 ============
-const autoConfig = getConfigWithEnvOverride();
-
-const NODE_ID = process.env.NODE_ID || `worker-${os.hostname()}`;
-const HEARTBEAT_INTERVAL = 30 * 1000;  // 30초
-const BATCH_SIZE = autoConfig.batchSize;
-const BATCH_REST = autoConfig.batchRestSec * 1000;  // 배치 간 휴식 (자동 계산)
-const TASK_REST = autoConfig.taskRestSec * 1000;    // 작업 간 휴식 (자동 계산)
-const PARALLEL_COUNT = autoConfig.parallelCount;    // 병렬 브라우저 수 (자동 계산)
-const ACCOUNTS_DIR = path.join(process.cwd(), "accounts");
-const VERSION = "1.1.0";  // 자동 최적화 버전
-
-// ============ Supabase 클라이언트 (2개) ============
-let supabaseControl: SupabaseClient;  // navertrafictest (모드 설정, 워커 등록)
-let supabaseProduction: SupabaseClient;  // adpang_production (상품 목록)
-
-function initSupabase(): void {
-  // Control DB (navertrafictest)
-  const controlUrl = process.env.SUPABASE_CONTROL_URL;
-  const controlKey = process.env.SUPABASE_CONTROL_KEY;
-
-  if (!controlUrl || !controlKey) {
-    console.error("[ERROR] SUPABASE_CONTROL_URL and SUPABASE_CONTROL_KEY required");
-    process.exit(1);
-  }
-  supabaseControl = createClient(controlUrl, controlKey);
-
-  // Production DB (adpang_production)
-  const prodUrl = process.env.SUPABASE_PRODUCTION_URL;
-  const prodKey = process.env.SUPABASE_PRODUCTION_KEY;
-
-  if (!prodUrl || !prodKey) {
-    console.error("[ERROR] SUPABASE_PRODUCTION_URL and SUPABASE_PRODUCTION_KEY required");
-    process.exit(1);
-  }
-  supabaseProduction = createClient(prodUrl, prodKey);
-
-  console.log("[Supabase] Control DB (navertrafictest) 연결됨");
-  console.log("[Supabase] Production DB (adpang_production) 연결됨");
-}
-
-// ============ 타입 ============
-interface TrafficMode {
-  mode_type: string;  // 'tonggum_login', 'tonggum_nologin', 'shogum_login', 'shogum_nologin'
-  enabled: boolean;
-  updated_at: string;
-}
-
-interface Product {
-  id: number;
+// ============ 타입 정의 ============
+interface WorkItem {
+  taskId: number;
+  slotId: number;
   keyword: string;
-  link_url: string;
+  productName: string;
   mid: string;
-  product_name: string;
+  linkUrl: string;
 }
 
-interface Account {
+interface Profile {
   name: string;
-  path: string;
+  prb_options?: {
+    headless?: boolean;
+    turnstile?: boolean;
+  };
 }
 
-// ============ 통계 ============
-const stats = {
-  total: 0,
-  success: 0,
-  failed: 0,
-  captcha: 0,
-  startTime: new Date(),
-};
+interface RunContext {
+  log: (event: string, data?: any) => void;
+  profile: Profile;
+  login: boolean;
+}
 
-let isRunning = true;
-let heartbeatTimer: NodeJS.Timeout | null = null;
+interface WorkerResult {
+  workerId: number;
+  success: boolean;
+  captcha: boolean;
+  error?: string;
+  productName?: string;
+}
+
+// ============ 전역 통계 ============
+let totalRuns = 0;
+let totalSuccess = 0;
+let totalCaptcha = 0;
+let totalFailed = 0;
+let batchCount = 0;
+let sessionStartTime = Date.now();
+let currentIP = "";
+let tetheringAdapter: string | null = null;
+
+// ============ 작업 큐 락 (동시 접근 방지) ============
+let isClaimingTask = false;
 
 // ============ 유틸 ============
+function sleep(ms: number): Promise<void> {
+  return new Promise(r => setTimeout(r, ms));
+}
+
 function log(msg: string, level: "info" | "warn" | "error" = "info") {
-  const time = new Date().toISOString();
+  const time = new Date().toISOString().substring(11, 19);
   const prefix = { info: "[INFO]", warn: "[WARN]", error: "[ERROR]" }[level];
   console.log(`[${time}] ${prefix} ${msg}`);
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-// ============ 워커 등록/하트비트 ============
-async function registerWorker(): Promise<void> {
-  const { error } = await supabaseControl
-    .from("workerNodes")
-    .upsert({
-      nodeId: NODE_ID,
-      nodeType: "worker",
-      status: "online",
-      lastHeartbeat: new Date().toISOString(),
-      hostname: os.hostname(),
-    }, { onConflict: "nodeId" });
-
-  if (error) {
-    log(`Worker registration failed: ${error.message}`, "error");
-  } else {
-    log(`Worker registered: ${NODE_ID}`);
+// ============ 프로필 로드 ============
+function loadProfile(profileName: string): Profile {
+  const profilePath = path.join(__dirname, 'profiles', `${profileName}.json`);
+  if (fs.existsSync(profilePath)) {
+    const content = fs.readFileSync(profilePath, 'utf-8');
+    return JSON.parse(content);
   }
+  // 기본 프로필
+  return {
+    name: profileName,
+    prb_options: {
+      headless: false,
+      turnstile: true
+    }
+  };
 }
 
-async function updateHeartbeat(): Promise<void> {
-  const { error } = await supabaseControl
-    .from("workerNodes")
-    .update({
-      status: "online",
-      lastHeartbeat: new Date().toISOString(),
-    })
-    .eq("nodeId", NODE_ID);
-
-  if (error) {
-    log(`Heartbeat failed: ${error.message}`, "warn");
+// ============ 작업 1개 가져오기 (직접 쿼리 + 즉시 삭제) ============
+async function claimWorkItem(): Promise<WorkItem | null> {
+  // 동시 접근 방지 (한 번에 하나씩만)
+  while (isClaimingTask) {
+    await sleep(100);
   }
-}
-
-function startHeartbeat(): void {
-  heartbeatTimer = setInterval(async () => {
-    await updateHeartbeat();
-  }, HEARTBEAT_INTERVAL);
-  log("Heartbeat started (30s interval)");
-}
-
-function stopHeartbeat(): void {
-  if (heartbeatTimer) {
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = null;
-  }
-}
-
-async function setWorkerOffline(): Promise<void> {
-  await supabaseControl
-    .from("workerNodes")
-    .update({ status: "offline" })
-    .eq("nodeId", NODE_ID);
-  log("Worker set to offline");
-}
-
-// ============ 모드 설정 가져오기 ============
-async function fetchEnabledModes(): Promise<TrafficMode[]> {
-  const { data, error } = await supabaseControl
-    .from("traffic_mode_settings")
-    .select("*")
-    .eq("enabled", true);
-
-  if (error) {
-    log(`Failed to fetch modes: ${error.message}`, "error");
-    return [];
-  }
-
-  return data || [];
-}
-
-// ============ 상품 목록 가져오기 ============
-async function fetchProducts(): Promise<Product[]> {
-  const { data, error } = await supabaseProduction
-    .from("slot_naver")
-    .select("id, keyword, link_url, mid, product_name")
-    .not("mid", "is", null)
-    .eq("status", "active")
-    .limit(100);
-
-  if (error) {
-    log(`Failed to fetch products: ${error.message}`, "error");
-    return [];
-  }
-
-  return data || [];
-}
-
-// ============ 로컬 계정 관리 ============
-function loadLocalAccounts(): Account[] {
-  if (!fs.existsSync(ACCOUNTS_DIR)) {
-    fs.mkdirSync(ACCOUNTS_DIR, { recursive: true });
-    log(`Created accounts directory: ${ACCOUNTS_DIR}`);
-    return [];
-  }
-
-  const files = fs.readdirSync(ACCOUNTS_DIR).filter(f => f.endsWith(".json"));
-  return files.map(f => ({
-    name: f.replace(".json", ""),
-    path: path.join(ACCOUNTS_DIR, f),
-  }));
-}
-
-// ============ 트래픽 실행 ============
-async function executeTraffic(
-  product: Product,
-  searchMode: "통검" | "쇼검",
-  account?: Account
-): Promise<boolean> {
-  let browser: Browser | PuppeteerBrowser | null = null;
-  let context: BrowserContext | null = null;
-  let page: PlaywrightPage | PuppeteerPage | null = null;
+  isClaimingTask = true;
 
   try {
-    if (BROWSER_TYPE === "prb") {
-      // ========== PRB (puppeteer-real-browser) - V7 Style ==========
-      log(`[PRB-V7] Starting browser (PC mode, no fingerprint)...`);
-      const response = await connect({
-        headless: false,
-        turnstile: true,
-        // fingerprint: false - V7 핵심! PC 모드 유지
-        args: ["--no-sandbox", "--disable-setuid-sandbox"],
-      });
-      browser = response.browser;
-      page = response.page;
+    // 1. 작업 여러개 가져오기
+    const { data: tasks, error: taskError } = await supabase
+      .from("traffic_navershopping")
+      .select("id, slot_id, keyword, link_url")
+      .eq("slot_type", "네이버쇼핑")
+      .order("id", { ascending: true })
+      .limit(10);
 
-      // 타임아웃 설정
-      page.setDefaultTimeout(30000);
-      page.setDefaultNavigationTimeout(30000);
+    if (taskError) {
+      log(`[FETCH ERROR] ${taskError.message}`, "error");
+      return null;
+    }
 
-    } else {
-      // ========== Playwright ==========
-      const launchOptions = {
-        headless: false,
-        args: [
-          "--disable-blink-features=AutomationControlled",
-          "--no-sandbox",
-        ],
+    if (!tasks || tasks.length === 0) {
+      return null;
+    }
+
+    // 2. mid, product_name 있는 작업 찾기
+    for (const task of tasks) {
+      const { data: slot } = await supabase
+        .from("slot_naver")
+        .select("mid, product_name")
+        .eq("id", task.slot_id)
+        .single();
+
+      if (!slot || !slot.mid || !slot.product_name) {
+        // mid/product_name 없으면 삭제하고 다음으로
+        await supabase.from("traffic_navershopping").delete().eq("id", task.id);
+        continue;
+      }
+
+      // 3. 유효한 작업 찾음 - 즉시 삭제
+      const { error: deleteError } = await supabase
+        .from("traffic_navershopping")
+        .delete()
+        .eq("id", task.id);
+
+      if (deleteError) {
+        log(`[DELETE ERROR] ${deleteError.message}`, "error");
+        return null;
+      }
+
+      return {
+        taskId: task.id,
+        slotId: task.slot_id,
+        keyword: task.keyword,
+        productName: slot.product_name,
+        mid: slot.mid,
+        linkUrl: task.link_url
       };
-
-      browser = await chromium.launch(launchOptions);
-
-      // 로그인 모드면 계정의 storageState 사용
-      if (account && fs.existsSync(account.path)) {
-        context = await browser.newContext({
-          storageState: account.path,
-          viewport: { width: 1280, height: 720 },
-        });
-        log(`Using account: ${account.name}`);
-      } else {
-        context = await browser.newContext({
-          viewport: { width: 1280, height: 720 },
-        });
-      }
-
-      page = await context.newPage();
     }
 
-    // 1. 네이버 메인 → 검색 (V7 Style: JS 이벤트 기반)
-    await page.goto("https://www.naver.com/", { waitUntil: "domcontentloaded" });
-    await sleep(1500 + Math.random() * 1000);
-
-    // 검색어: 쇼검은 keyword, 통검은 productName (단어 셔플)
-    const searchQuery = searchMode === "쇼검"
-      ? product.keyword
-      : shuffleWords(product.product_name).substring(0, 50);
-
-    log(`[${searchMode}] 검색어: ${searchQuery}`);
-
-    // V7 Style: JS 이벤트 기반 검색 (PRB일 때)
-    if (BROWSER_TYPE === "prb") {
-      const searchSubmitted = await page.evaluate((query: string) => {
-        const input = document.querySelector('input[name="query"]') as HTMLInputElement;
-        if (input) {
-          input.value = query;
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-          const form = input.closest('form');
-          if (form) {
-            form.submit();
-            return true;
-          }
-        }
-        return false;
-      }, searchQuery);
-
-      if (!searchSubmitted) {
-        // Fallback: 일반 타이핑
-        await pageType(page, 'input[name="query"]', searchQuery);
-        await pagePress(page, 'input[name="query"]', "Enter");
-      }
-
-      // Navigation 대기
-      try {
-        await page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 20000 });
-      } catch {}
-    } else {
-      // Playwright: 일반 방식
-      await pageType(page, 'input[name="query"]', searchQuery);
-      await pagePress(page, 'input[name="query"]', "Enter");
-      await pageWaitLoad(page);
-    }
-    await sleep(2500 + Math.random() * 1000);
-
-    // 2. 쇼검이면 쇼핑 탭 클릭
-    if (searchMode === "쇼검") {
-      log(`[${searchMode}] Looking for shopping tab...`);
-
-      // 쇼핑 탭 찾기
-      const shoppingTab = await page.$('a:has-text("쇼핑")') ||
-                         await page.$('a[href*="shopping.naver.com"]');
-
-      if (shoppingTab) {
-        await shoppingTab.click();
-        await sleep(2500 + Math.random() * 1000);
-        log(`[${searchMode}] Shopping tab clicked`);
-      } else {
-        // Fallback: 직접 쇼핑 검색
-        await page.goto(`https://search.shopping.naver.com/search/all?query=${encodeURIComponent(searchQuery)}`);
-        await sleep(2000);
-      }
-    }
-
-    // 3. 스크롤
-    for (let i = 0; i < 3; i++) {
-      await page.evaluate(() => window.scrollBy(0, 400));
-      await sleep(500);
-    }
-
-    // 4. MID 찾아서 클릭 (V7 Style: DOM 클릭 + 새 탭 핸들링)
-    const mid = product.mid;
-    log(`[${searchMode}] Searching for MID: ${mid}`);
-
-    // V7 Style: PRB일 때 새 탭 핸들링 + DOM 클릭
-    if (BROWSER_TYPE === "prb" && searchMode === "통검") {
-      let productPage: PuppeteerPage | null = null;
-
-      // 새 탭 핸들링 Promise 설정 (V7 핵심!)
-      const newTabPromise = new Promise<PuppeteerPage>((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('New tab timeout')), 10000);
-
-        (browser as PuppeteerBrowser).once('targetcreated', async (target: any) => {
-          clearTimeout(timeout);
-          if (target.type() === 'page') {
-            const newPage = await target.page();
-            if (newPage) resolve(newPage as PuppeteerPage);
-            else reject(new Error('Failed to get new page'));
-          }
-        });
-      });
-
-      // DOM 클릭 (V7 핵심!: Bridge URL 스킵, 직접 smartstore만)
-      const clickResult = await page.evaluate((targetMid: string) => {
-        const links = Array.from(document.querySelectorAll('a'));
-
-        // 1차: MID 포함된 smartstore 직접 링크
-        for (const link of links) {
-          const href = link.href || '';
-          // Bridge URL 스킵 (V7 핵심!)
-          if (href.includes('/bridge') || href.includes('cr.shopping') ||
-              href.includes('cr2.shopping') || href.includes('cr3.shopping')) {
-            continue;
-          }
-          if ((href.includes('smartstore.naver.com') || href.includes('brand.naver.com')) &&
-              href.includes('/products/')) {
-            if (href.includes(targetMid)) {
-              (link as HTMLElement).click();
-              return { clicked: true, href, method: 'direct-mid' };
-            }
-          }
-        }
-
-        // 2차: 아무 smartstore 링크 (MID 없어도)
-        for (const link of links) {
-          const href = link.href || '';
-          if (href.includes('/bridge') || href.includes('cr.shopping')) continue;
-          if ((href.includes('smartstore.naver.com') || href.includes('brand.naver.com')) &&
-              href.includes('/products/')) {
-            (link as HTMLElement).click();
-            return { clicked: true, href, method: 'any-smartstore' };
-          }
-        }
-
-        return { clicked: false };
-      }, mid);
-
-      if (clickResult.clicked) {
-        log(`[${searchMode}] DOM click: ${clickResult.method}`);
-
-        // 새 탭 대기
-        try {
-          productPage = await newTabPromise;
-          log(`[${searchMode}] New tab opened`);
-          try {
-            await productPage.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 });
-          } catch {}
-          await sleep(2000);
-
-          // 상품 페이지 검증
-          const pageUrl = productPage.url();
-          const isSmartStore = pageUrl.includes('smartstore.naver.com') && pageUrl.includes('/products/');
-
-          if (isSmartStore) {
-            log(`[${searchMode}] ✅ Product page success: ${pageUrl.substring(0, 60)}`);
-            stats.success++;
-
-            // 새 탭 닫기
-            await productPage.close().catch(() => {});
-            return true;
-          }
-        } catch (e) {
-          log(`[${searchMode}] New tab wait failed, checking current page`);
-          // 새 탭 없음 - 현재 페이지에서 진행
-        }
-      }
-    } else if (searchMode === "통검") {
-      // Playwright: 기존 방식
-      const clicked = await page.evaluate((targetMid: string) => {
-        const links = Array.from(document.querySelectorAll("a"));
-        for (const link of links) {
-          const href = link.href || "";
-          if (href.includes("smartstore.naver.com") && href.includes("/products/") && href.includes(targetMid)) {
-            (link as HTMLElement).click();
-            return true;
-          }
-          if (href.includes("brand.naver.com") && href.includes("/products/") && href.includes(targetMid)) {
-            (link as HTMLElement).click();
-            return true;
-          }
-        }
-        return false;
-      }, mid);
-
-      if (clicked) {
-        log(`[${searchMode}] Direct click success for MID: ${mid}`);
-        await sleep(3000);
-        stats.success++;
-        return true;
-      }
-    }
-
-    // Fallback: catalog URL로 이동
-    const catalogUrl = `https://search.shopping.naver.com/catalog/${mid}`;
-    await page.evaluate((url: string) => {
-      const link = document.createElement("a");
-      link.href = url;
-      link.target = "_self";
-      document.body.appendChild(link);
-      link.click();
-    }, catalogUrl);
-
-    await sleep(4000);
-
-    // ========== 캡챠 감지 및 해결 ==========
-    const hasCaptcha = await page.evaluate(() => {
-      const bodyText = document.body.innerText || "";
-      return bodyText.includes("보안 확인") ||
-             bodyText.includes("영수증") ||
-             bodyText.includes("무엇입니까") ||
-             bodyText.includes("일시적으로 제한") ||
-             bodyText.includes("[?]");
-    });
-
-    if (hasCaptcha) {
-      log(`[${searchMode}] 🔐 CAPTCHA 감지! 자동 해결 시도...`);
-      stats.captcha++;
-
-      try {
-        const solver = new ReceiptCaptchaSolver();
-        const solved = await solver.solve(page);
-
-        if (solved) {
-          log(`[${searchMode}] ✅ CAPTCHA 해결 성공!`);
-          await sleep(2000);
-        } else {
-          log(`[${searchMode}] ❌ CAPTCHA 해결 실패`, "warn");
-          stats.failed++;
-          return false;
-        }
-      } catch (captchaError: any) {
-        log(`[${searchMode}] ❌ CAPTCHA 해결 에러: ${captchaError.message}`, "error");
-        stats.failed++;
-        return false;
-      }
-    }
-
-    const finalUrl = page.url();
-    const isProduct = finalUrl.includes("/catalog/") ||
-                     finalUrl.includes("/products/") ||
-                     finalUrl.includes("smartstore.naver.com");
-
-    if (!isProduct) {
-      log(`[${searchMode}] ❌ Not a product page: ${finalUrl.substring(0, 60)}`, "warn");
-      stats.failed++;
-      return false;
-    }
-
-    // MID 검증 (정확한 MID만 성공)
-    const midMatched = finalUrl.includes(mid) || await page.evaluate((targetMid: string) => {
-      const elements = document.querySelectorAll('[data-nv-mid], [data-nvmid], [data-product-id]');
-      for (const el of Array.from(elements)) {
-        const dataMid = el.getAttribute('data-nv-mid') ||
-                       el.getAttribute('data-nvmid') ||
-                       el.getAttribute('data-product-id');
-        if (dataMid === targetMid) return true;
-      }
-      return false;
-    }, mid);
-
-    if (!midMatched) {
-      log(`[${searchMode}] ❌ MID mismatch: expected ${mid}, got ${finalUrl.substring(0, 60)}`, "warn");
-      stats.failed++;
-      return false;
-    }
-
-    log(`[${searchMode}] ✅ Success (MID verified): ${finalUrl.substring(0, 60)}`);
-    stats.success++;
-    return true;
-
-  } catch (error: any) {
-    log(`[${searchMode}] Error: ${error.message}`, "error");
-    stats.failed++;
-    return false;
+    return null;
+  } catch (e: any) {
+    log(`[CLAIM ERROR] ${e.message}`, "error");
+    return null;
   } finally {
-    if (context) await context.close().catch(() => {});
-    if (browser) await browser.close().catch(() => {});
+    isClaimingTask = false;
   }
 }
 
-// ============ 메인 루프 ============
+// ============ slot_naver 통계 업데이트 ============
+async function updateSlotStats(slotId: number, success: boolean): Promise<void> {
+  const column = success ? "success_count" : "fail_count";
+  const { data: current } = await supabase
+    .from("slot_naver")
+    .select(column)
+    .eq("id", slotId)
+    .single();
+
+  if (current) {
+    const newValue = ((current as any)[column] || 0) + 1;
+    await supabase
+      .from("slot_naver")
+      .update({ [column]: newValue })
+      .eq("id", slotId);
+  }
+}
+
+// ============ 단일 워커 실행 (브라우저 생성 → 작업 실행 → 종료) ============
+async function runSingleWorker(workerId: number, profile: Profile): Promise<WorkerResult> {
+  let browser: Browser | null = null;
+  let page: Page | null = null;
+
+  const result: WorkerResult = {
+    workerId,
+    success: false,
+    captcha: false
+  };
+
+  try {
+    // 1. 작업 가져오기
+    const work = await claimWorkItem();
+
+    if (!work) {
+      return result; // 작업 없음
+    }
+
+    result.productName = work.productName.substring(0, 30);
+    log(`[Worker ${workerId}] 작업: ${result.productName}... (mid=${work.mid})`);
+
+    // 2. 브라우저 시작
+    const response = await connect({
+      headless: profile.prb_options?.headless ?? false,
+      turnstile: profile.prb_options?.turnstile ?? true,
+    });
+
+    browser = response.browser as Browser;
+    page = response.page as Page;
+    page.setDefaultTimeout(30000);
+    page.setDefaultNavigationTimeout(30000);
+
+    // 3. Context 생성
+    const ctx: RunContext = {
+      log: (event: string) => log(`[Worker ${workerId}] ${event}`),
+      profile,
+      login: false
+    };
+
+    // 4. Product 객체
+    const product = {
+      id: work.slotId,
+      keyword: work.keyword,
+      product_name: work.productName,
+      mid: work.mid
+    };
+
+    // 5. V7 엔진 실행
+    const engineResult = await runV7Engine(page, browser, product, ctx);
+
+    // 6. 결과 처리
+    if (engineResult.productPageEntered) {
+      result.success = true;
+      totalSuccess++;
+      await updateSlotStats(work.slotId, true);
+    } else if (engineResult.captchaDetected) {
+      result.captcha = true;
+      totalCaptcha++;
+      await updateSlotStats(work.slotId, false);
+    } else {
+      result.error = engineResult.error;
+      totalFailed++;
+      await updateSlotStats(work.slotId, false);
+    }
+
+    totalRuns++;
+
+  } catch (e: any) {
+    result.error = e.message;
+    log(`[Worker ${workerId}] ERROR: ${e.message}`, "error");
+  } finally {
+    // 브라우저 종료
+    if (browser) {
+      await browser.close().catch(() => {});
+    }
+  }
+
+  return result;
+}
+
+// ============ 배치 실행 (5개 동시 → IP 로테이션) ============
+async function runBatch(profile: Profile): Promise<boolean> {
+  batchCount++;
+  log(`\n${"=".repeat(50)}`);
+  log(`  배치 #${batchCount} 시작 (IP: ${currentIP})`);
+  log(`${"=".repeat(50)}`);
+
+  // 5개 워커 동시 실행
+  const workerPromises: Promise<WorkerResult>[] = [];
+  for (let i = 1; i <= PARALLEL_BROWSERS; i++) {
+    workerPromises.push(runSingleWorker(i, profile));
+  }
+
+  // 모두 완료 대기
+  const results = await Promise.all(workerPromises);
+
+  // 결과 집계
+  const successCount = results.filter(r => r.success).length;
+  const captchaCount = results.filter(r => r.captcha).length;
+  const noWorkCount = results.filter(r => !r.productName).length;
+
+  log(`\n  배치 #${batchCount} 완료:`);
+  log(`  - 성공: ${successCount}/${PARALLEL_BROWSERS}`);
+  log(`  - CAPTCHA: ${captchaCount}`);
+  log(`  - 작업없음: ${noWorkCount}`);
+
+  // 작업이 모두 없으면 false 반환
+  if (noWorkCount === PARALLEL_BROWSERS) {
+    return false;
+  }
+
+  return true;
+}
+
+// ============ 통계 출력 ============
+function printStats(): void {
+  const elapsed = (Date.now() - sessionStartTime) / 1000 / 60;
+  const successRate = totalRuns > 0 ? (totalSuccess / totalRuns * 100).toFixed(1) : '0';
+  const captchaRate = totalRuns > 0 ? (totalCaptcha / totalRuns * 100).toFixed(1) : '0';
+
+  console.log(`\n${"=".repeat(60)}`);
+  console.log(`  통계 (${elapsed.toFixed(1)}분 경과)`);
+  console.log(`${"=".repeat(60)}`);
+  console.log(`  배치: ${batchCount}회 | 총 실행: ${totalRuns}회`);
+  console.log(`  성공: ${totalSuccess} (${successRate}%) | CAPTCHA: ${totalCaptcha} (${captchaRate}%)`);
+  console.log(`  실패: ${totalFailed} | 현재 IP: ${currentIP}`);
+  console.log(`  속도: ${elapsed > 0 ? (totalRuns / elapsed).toFixed(1) : '0'}회/분`);
+  console.log(`${"=".repeat(60)}\n`);
+}
+
+// ============ 메인 ============
 async function main() {
-  // 시스템 정보 및 자동 최적화 설정 출력
-  console.log("");
-  printSystemInfo(autoConfig.systemInfo);
-  console.log("");
-  printOptimalConfig(autoConfig);
+  console.log(`\n${"=".repeat(60)}`);
+  console.log(`  Unified Runner (PRB + IP Rotation + Batch)`);
+  console.log(`${"=".repeat(60)}`);
+  console.log(`  동시 브라우저: ${PARALLEL_BROWSERS}개`);
+  console.log(`  IP 로테이션: ${IP_ROTATION_ENABLED ? '활성화' : '비활성화'}`);
+  console.log(`${"=".repeat(60)}`);
 
-  log("=".repeat(50));
-  log("  TURAFIC Unified Runner (Auto-Optimized)");
-  log(`  Node ID: ${NODE_ID}`);
-  log(`  Version: ${VERSION}`);
-  log(`  Browser: ${BROWSER_TYPE.toUpperCase()}`);
-  log(`  Parallel: ${PARALLEL_COUNT} browsers`);
-  log(`  Batch: ${BATCH_SIZE} tasks, ${BATCH_REST / 1000}s rest`);
-  log("=".repeat(50));
+  // 프로필 로드
+  const profile = loadProfile("pc_v7");
+  log(`[Profile] ${profile.name}`);
 
-  // Supabase 초기화
-  initSupabase();
+  // 테더링 어댑터 감지
+  if (IP_ROTATION_ENABLED) {
+    log("\n테더링 어댑터 감지 중...");
+    tetheringAdapter = await getTetheringAdapter();
+    if (tetheringAdapter) {
+      log(`테더링 어댑터: ${tetheringAdapter}`);
+    } else {
+      log("테더링 어댑터 없음 - IP 로테이션 비활성화", "warn");
+    }
+  }
 
-  // 워커 등록
-  await registerWorker();
+  // 현재 IP 확인
+  try {
+    currentIP = await getCurrentIP();
+    log(`현재 IP: ${currentIP}`);
+  } catch (e: any) {
+    log(`IP 확인 실패: ${e.message}`, "error");
+    currentIP = "unknown";
+  }
 
-  // 하트비트 시작
-  startHeartbeat();
-
-  // 로컬 계정 로드
-  const accounts = loadLocalAccounts();
-  log(`Loaded ${accounts.length} local accounts`);
-
-  // Graceful shutdown
-  process.on("SIGINT", async () => {
-    log("Shutting down...");
-    isRunning = false;
-    stopHeartbeat();
-    await setWorkerOffline();
-    process.exit(0);
-  });
+  // 통계 출력 인터벌
+  setInterval(printStats, 60000);
 
   // 메인 루프
-  let accountIndex = 0;
-
-  while (isRunning) {
+  while (true) {
     try {
-      // 1. 활성화된 모드 가져오기
-      const enabledModes = await fetchEnabledModes();
+      // 배치 실행
+      const hasWork = await runBatch(profile);
 
-      if (enabledModes.length === 0) {
-        log("No enabled modes, waiting...");
-        await sleep(30000);
+      if (!hasWork) {
+        log("대기 중인 작업 없음...");
+        await sleep(EMPTY_WAIT);
         continue;
       }
 
-      log(`Enabled modes: ${enabledModes.map(m => m.mode_type).join(", ")}`);
+      // IP 로테이션
+      if (IP_ROTATION_ENABLED && tetheringAdapter) {
+        log("\nIP 로테이션 시작...");
+        const rotationResult = await rotateIP(tetheringAdapter);
 
-      // 2. 상품 목록 가져오기
-      const products = await fetchProducts();
-
-      if (products.length === 0) {
-        log("No products available, waiting...");
-        await sleep(30000);
-        continue;
-      }
-
-      log(`Fetched ${products.length} products`);
-
-      // 3. 활성화된 모드별로 실행
-      for (const mode of enabledModes) {
-        const searchMode = mode.mode_type.startsWith("tonggum") ? "통검" : "쇼검";
-        const isLogin = mode.mode_type.includes("login") && !mode.mode_type.includes("nologin");
-
-        log(`\n--- Mode: ${mode.mode_type} (${searchMode}, login=${isLogin}) ---`);
-
-        // 배치 실행
-        const batch = products.slice(0, BATCH_SIZE);
-
-        for (const product of batch) {
-          if (!isRunning) break;
-
-          stats.total++;
-
-          // 로그인 모드: 계정 순환 사용
-          let account: Account | undefined;
-          if (isLogin && accounts.length > 0) {
-            account = accounts[accountIndex % accounts.length];
-            accountIndex++;
-          }
-
-          log(`[${stats.total}] ${product.product_name.substring(0, 30)}... (MID: ${product.mid})`);
-
-          await executeTraffic(product, searchMode, account);
-
-          // 작업 간 휴식
-          await sleep(TASK_REST);
+        if (rotationResult.success) {
+          log(`IP 변경: ${rotationResult.oldIP} → ${rotationResult.newIP}`);
+          currentIP = rotationResult.newIP;
+        } else {
+          log(`IP 로테이션 실패: ${rotationResult.error}`, "warn");
         }
-
-        log(`Mode ${mode.mode_type} batch complete`);
       }
 
-      // 4. 통계 출력
-      const elapsed = (Date.now() - stats.startTime.getTime()) / 1000 / 60;
-      log(`\n--- Stats (${elapsed.toFixed(1)} min) ---`);
-      log(`Total: ${stats.total}, Success: ${stats.success}, Failed: ${stats.failed}`);
-      log(`Success rate: ${((stats.success / stats.total) * 100).toFixed(1)}%`);
-
-      // 5. 배치 간 휴식
-      log(`\nResting for ${BATCH_REST / 1000} seconds...`);
+      // 배치 간 휴식
       await sleep(BATCH_REST);
 
     } catch (error: any) {
-      log(`Main loop error: ${error.message}`, "error");
+      log(`메인 루프 에러: ${error.message}`, "error");
       await sleep(10000);
     }
   }
 }
+
+// 종료 시그널
+process.on('SIGINT', () => {
+  console.log('\n\n[STOP] 종료 요청됨');
+  printStats();
+  process.exit(0);
+});
 
 // 실행
 main().catch(console.error);
