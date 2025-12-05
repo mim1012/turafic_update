@@ -41,6 +41,9 @@ const BROWSER_RESTART_EVERY = 10; // N회마다 브라우저 재시작
 const SUPABASE_URL = process.env.SUPABASE_PRODUCTION_URL!;
 const SUPABASE_KEY = process.env.SUPABASE_PRODUCTION_KEY!;
 
+console.log(`[DEBUG] SUPABASE_URL: ${SUPABASE_URL}`);
+console.log(`[DEBUG] SUPABASE_KEY: ${SUPABASE_KEY?.substring(0, 50)}...`);
+
 // ============ Supabase 클라이언트 ============
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -88,7 +91,12 @@ async function claimWorkItem(): Promise<WorkItem | null> {
       .order("id", { ascending: true })
       .limit(1);
 
-    if (taskError || !tasks || tasks.length === 0) {
+    if (taskError) {
+      console.error('[FETCH ERROR]', taskError.message);
+      return null;
+    }
+
+    if (!tasks || tasks.length === 0) {
       return null;
     }
 
