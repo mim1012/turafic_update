@@ -36,22 +36,25 @@ function log(msg: string) {
  */
 function gitPull(): boolean {
   try {
-    log('Git pull 실행 중...');
-    const result = execSync('git pull origin main', {
+    log('Git 업데이트 중...');
+
+    // 로컬 변경사항 무시하고 강제 업데이트
+    execSync('git fetch origin main', {
       cwd: WORK_DIR,
       encoding: 'utf-8',
       timeout: 30000
     });
 
-    if (result.includes('Already up to date')) {
-      log('이미 최신 버전');
-      return false;
-    } else {
-      log('업데이트 완료: ' + result.trim().split('\n')[0]);
-      return true;
-    }
+    const result = execSync('git reset --hard origin/main', {
+      cwd: WORK_DIR,
+      encoding: 'utf-8',
+      timeout: 30000
+    });
+
+    log('업데이트 완료');
+    return true;
   } catch (e: any) {
-    log('Git pull 실패: ' + e.message);
+    log('Git 업데이트 실패: ' + e.message);
     return false;
   }
 }
