@@ -109,7 +109,8 @@ async function claimWorkItem(): Promise<WorkItem | null> {
         .single();
 
       if (!slot || !slot.mid || !slot.product_name) {
-        // 이 작업은 건너뛰기 (삭제하지 않음)
+        // mid/product_name 없으면 삭제하고 다음으로
+        await supabase.from("traffic_navershopping").delete().eq("id", task.id);
         continue;
       }
 
