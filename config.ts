@@ -33,7 +33,18 @@ const DEFAULT_CONFIG: Partial<UpdaterConfig> = {
   githubRawBase: 'https://raw.githubusercontent.com/mim1012/turafic_update/main',
   checkIntervalMs: 3 * 60 * 1000, // 3분
   localDir: 'C:\\turafic',
-  files: ['experiment-runner.js', 'worker-runner.js', 'parallel-ip-rotation-playwright.ts', 'playwright-save-login.ts', 'playwright-real-traffic.ts', 'unified-runner.ts', 'save-account.ts', 'version.json'],
+  files: [
+    // PRB 엔진 (기본)
+    'unified-runner.ts',
+    'engines/v7_engine.ts',
+    'runner/types.ts',
+    'ipRotation.ts',
+    'profiles/pc_v7.json',
+    // Playwright 엔진
+    'parallel-ip-rotation-playwright.ts',
+    // 기타
+    'version.json'
+  ],
 };
 
 /**
@@ -54,7 +65,7 @@ export function loadConfig(): UpdaterConfig {
   }
 
   // 환경변수가 우선
-  const nodeType = (process.env.NODE_TYPE || fileConfig.nodeType || 'worker') as NodeType;
+  const nodeType = (process.env.NODE_TYPE || fileConfig.nodeType || 'prb') as NodeType;
   const hostname = os.hostname().toLowerCase().replace(/[^a-z0-9]/g, '-');
 
   const config: UpdaterConfig = {
