@@ -234,17 +234,21 @@ export async function runV7Engine(
       await sleep(randomBetween(400, 700));
     }
 
-    // 5. 새 탭 핸들링 Promise 설정
+    // 5. 새 탭 핸들링 Promise 설정 (타임아웃 시 null 반환)
     let productPage: Page | null = null;
-    const newTabPromise = new Promise<Page>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('New tab timeout')), 10000);
+    const newTabPromise = new Promise<Page | null>((resolve) => {
+      const timeout = setTimeout(() => {
+        ctx.log("engine:newtab_timeout");
+        resolve(null);  // 타임아웃 시 null 반환 (에러 대신)
+      }, 15000);
 
       browser.once('targetcreated', async (target: any) => {
         clearTimeout(timeout);
         if (target.type() === 'page') {
           const newPage = await target.page();
-          if (newPage) resolve(newPage as Page);
-          else reject(new Error('Failed to get new page'));
+          resolve(newPage as Page || null);
+        } else {
+          resolve(null);
         }
       });
     });
@@ -309,15 +313,16 @@ export async function runV7Engine(
 
     ctx.log("engine:clicked", { method: linkInfo.method, href: linkInfo.href?.substring(0, 60) });
 
-    // 7. 새 탭 대기
-    try {
-      productPage = await newTabPromise;
+    // 7. 새 탭 대기 (타임아웃 시 현재 페이지 사용)
+    productPage = await newTabPromise;
+
+    if (productPage) {
       ctx.log("engine:newtab", { opened: true });
       try {
         await productPage.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 });
       } catch {}
       await sleep(2000);
-    } catch (e) {
+    } else {
       ctx.log("engine:newtab", { opened: false, fallback: "current page" });
       productPage = page;
       try {
