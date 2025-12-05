@@ -61,6 +61,9 @@ let totalCaptcha = 0;
 let totalFailed = 0;
 let sessionStartTime = Date.now();
 
+// ============ 작업 큐 락 (동시 접근 방지) ============
+let isClaimingTask = false;
+
 // ============ 프로필 로드 ============
 function loadProfile(profileName: string): Profile {
   const profilePath = path.join(__dirname, '..', 'profiles', `${profileName}.json`);
@@ -68,29 +71,63 @@ function loadProfile(profileName: string): Profile {
   return JSON.parse(content);
 }
 
-// ============ 작업 1개 가져오기 (원자적 - RPC) ============
+// ============ 작업 1개 가져오기 (직접 쿼리 + 즉시 삭제) ============
 async function claimWorkItem(): Promise<WorkItem | null> {
-  // RPC 함수 호출 - SELECT + DELETE 원자적 처리
-  const { data, error } = await supabase.rpc('claim_and_delete_task');
-
-  if (error) {
-    console.error('[RPC ERROR]', error.message);
-    return null;
+  // 동시 접근 방지 (한 번에 하나씩만)
+  while (isClaimingTask) {
+    await new Promise(r => setTimeout(r, 100));
   }
+  isClaimingTask = true;
 
-  if (!data || data.length === 0) {
-    return null;
+  try {
+    // 1. 작업 1개 가져오기
+    const { data: tasks, error: taskError } = await supabase
+      .from("traffic_navershopping")
+      .select("id, slot_id, keyword, link_url")
+      .eq("slot_type", "네이버쇼핑")
+      .order("id", { ascending: true })
+      .limit(1);
+
+    if (taskError || !tasks || tasks.length === 0) {
+      return null;
+    }
+
+    const task = tasks[0];
+
+    // 2. 즉시 삭제 (다른 워커가 가져가지 못하게)
+    const { error: deleteError } = await supabase
+      .from("traffic_navershopping")
+      .delete()
+      .eq("id", task.id);
+
+    if (deleteError) {
+      console.error('[DELETE ERROR]', deleteError.message);
+      return null;
+    }
+
+    // 3. slot_naver에서 mid, product_name 조회
+    const { data: slot } = await supabase
+      .from("slot_naver")
+      .select("mid, product_name")
+      .eq("id", task.slot_id)
+      .single();
+
+    if (!slot || !slot.mid || !slot.product_name) {
+      console.error('[SLOT ERROR] mid or product_name is null');
+      return null;
+    }
+
+    return {
+      taskId: task.id,
+      slotId: task.slot_id,
+      keyword: task.keyword,
+      productName: slot.product_name,
+      mid: slot.mid,
+      linkUrl: task.link_url
+    };
+  } finally {
+    isClaimingTask = false;
   }
-
-  const row = data[0];
-  return {
-    taskId: row.task_id,
-    slotId: row.slot_id,
-    keyword: row.keyword,
-    productName: row.product_name,
-    mid: row.mid,
-    linkUrl: row.link_url
-  };
 }
 
 // ============ slot_naver 통계 업데이트 ============
@@ -229,7 +266,7 @@ async function main() {
   console.log(`${"=".repeat(60)}`);
   console.log(`  동시 브라우저: ${PARALLEL_BROWSERS}개`);
   console.log(`  브라우저 재시작: ${BROWSER_RESTART_EVERY}회마다`);
-  console.log(`  필터: slot_type='네이버쇼핑', customer_id!='master'`);
+  console.log(`  필터: slot_type='네이버쇼핑'`);
   console.log(`${"=".repeat(60)}`);
 
   const profile = loadProfile("pc_v7");
