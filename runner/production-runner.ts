@@ -59,11 +59,7 @@ let totalRuns = 0;
 let totalSuccess = 0;
 let totalCaptcha = 0;
 let totalFailed = 0;
-let totalDeleted = 0;
 let sessionStartTime = Date.now();
-
-// ============ 작업 락 (중복 방지) ============
-const lockedTaskIds = new Set<number>();
 
 // ============ 프로필 로드 ============
 function loadProfile(profileName: string): Profile {
@@ -72,66 +68,29 @@ function loadProfile(profileName: string): Profile {
   return JSON.parse(content);
 }
 
-// ============ 작업 1개 가져오기 (락 처리) ============
-async function fetchOneWorkItem(): Promise<WorkItem | null> {
-  // traffic_navershopping에서 1개 가져오기
-  const { data: tasks, error: taskError } = await supabase
-    .from("traffic_navershopping")
-    .select("id, slot_type, keyword, link_url, slot_count, slot_sequence, customer_id, slot_id")
-    .eq("slot_type", "네이버쇼핑")
-    .neq("customer_id", "master")
-    .limit(20);  // 여러개 가져와서 락 안 걸린 것 선택
+// ============ 작업 1개 가져오기 (원자적 - RPC) ============
+async function claimWorkItem(): Promise<WorkItem | null> {
+  // RPC 함수 호출 - SELECT + DELETE 원자적 처리
+  const { data, error } = await supabase.rpc('claim_and_delete_task');
 
-  if (taskError || !tasks || tasks.length === 0) {
+  if (error) {
+    console.error('[RPC ERROR]', error.message);
     return null;
   }
 
-  // 락 안 걸린 작업 찾기
-  for (const task of tasks) {
-    if (lockedTaskIds.has(task.id)) continue;
-
-    // slot_naver에서 mid, product_name 매칭
-    const { data: slot } = await supabase
-      .from("slot_naver")
-      .select("id, mid, product_name")
-      .eq("id", task.slot_id)
-      .single();
-
-    if (!slot || !slot.mid || !slot.product_name) continue;
-
-    // 락 걸기
-    lockedTaskIds.add(task.id);
-
-    return {
-      taskId: task.id,
-      slotId: task.slot_id,
-      keyword: task.keyword,
-      productName: slot.product_name,
-      mid: slot.mid,
-      linkUrl: task.link_url
-    };
+  if (!data || data.length === 0) {
+    return null;
   }
 
-  return null;
-}
-
-// ============ 작업 삭제 ============
-async function deleteTask(taskId: number): Promise<boolean> {
-  const { error } = await supabase
-    .from("traffic_navershopping")
-    .delete()
-    .eq("id", taskId);
-
-  // 락 해제
-  lockedTaskIds.delete(taskId);
-
-  if (error) {
-    console.error(`[ERROR] 삭제 실패 (id=${taskId}):`, error.message);
-    return false;
-  }
-
-  totalDeleted++;
-  return true;
+  const row = data[0];
+  return {
+    taskId: row.task_id,
+    slotId: row.slot_id,
+    keyword: row.keyword,
+    productName: row.product_name,
+    mid: row.mid,
+    linkUrl: row.link_url
+  };
 }
 
 // ============ slot_naver 통계 업데이트 ============
@@ -186,8 +145,8 @@ async function browserWorker(workerId: number, profile: Profile): Promise<void> 
         log("브라우저 시작됨");
       }
 
-      // 작업 가져오기
-      const work = await fetchOneWorkItem();
+      // 작업 가져오기 (원자적 - 가져오면서 삭제됨)
+      const work = await claimWorkItem();
 
       if (!work) {
         log("대기 중인 작업 없음...");
@@ -199,7 +158,7 @@ async function browserWorker(workerId: number, profile: Profile): Promise<void> 
       taskCount++;
       const startTime = Date.now();
 
-      log(`작업 시작: ${work.productName.substring(0, 30)}... (task=${work.taskId})`);
+      log(`작업 시작: ${work.productName.substring(0, 30)}... (mid=${work.mid})`);
 
       // Context 생성
       const ctx: RunContext = {
@@ -220,7 +179,7 @@ async function browserWorker(workerId: number, profile: Profile): Promise<void> 
       const result = await runV7Engine(page!, browser!, product, ctx);
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
 
-      // 결과 처리
+      // 결과 처리 (작업은 이미 RPC에서 삭제됨)
       if (result.productPageEntered) {
         totalSuccess++;
         log(`SUCCESS | ${duration}s`);
@@ -234,9 +193,6 @@ async function browserWorker(workerId: number, profile: Profile): Promise<void> 
         log(`FAILED: ${result.error} | ${duration}s`);
         await updateSlotStats(work.slotId, false);
       }
-
-      // 작업 삭제
-      await deleteTask(work.taskId);
 
     } catch (e: any) {
       log(`ERROR: ${e.message}`);
@@ -262,7 +218,7 @@ function printStats(): void {
   console.log(`${"=".repeat(60)}`);
   console.log(`  총 실행: ${totalRuns}회 | 성공: ${totalSuccess} (${successRate}%)`);
   console.log(`  CAPTCHA: ${totalCaptcha} (${captchaRate}%) | 실패: ${totalFailed}`);
-  console.log(`  삭제: ${totalDeleted}개 | 속도: ${(totalRuns / elapsed).toFixed(1)}회/분`);
+  console.log(`  속도: ${elapsed > 0 ? (totalRuns / elapsed).toFixed(1) : '0'}회/분`);
   console.log(`${"=".repeat(60)}\n`);
 }
 
