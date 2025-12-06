@@ -75,6 +75,7 @@ interface WorkerResult {
   workerId: number;
   success: boolean;
   captcha: boolean;
+  blocked: boolean;  // IP 차단 감지
   error?: string;
   productName?: string;
 }
@@ -216,7 +217,8 @@ async function runSingleWorker(workerId: number, profile: Profile): Promise<Work
   const result: WorkerResult = {
     workerId,
     success: false,
-    captcha: false
+    captcha: false,
+    blocked: false
   };
 
   try {
@@ -268,6 +270,10 @@ async function runSingleWorker(workerId: number, profile: Profile): Promise<Work
       result.captcha = true;
       totalCaptcha++;
       await updateSlotStats(work.slotId, false);
+    } else if (engineResult.error === 'Blocked') {
+      result.blocked = true;
+      log(`[Worker ${workerId}] IP 차단 감지!`, "warn");
+      await updateSlotStats(work.slotId, false);
     } else {
       result.error = engineResult.error;
       totalFailed++;
@@ -308,12 +314,22 @@ async function runBatch(profile: Profile): Promise<boolean> {
   // 결과 집계
   const successCount = results.filter(r => r.success).length;
   const captchaCount = results.filter(r => r.captcha).length;
+  const blockedCount = results.filter(r => r.blocked).length;
   const noWorkCount = results.filter(r => !r.productName).length;
 
   log(`\n  배치 #${batchCount} 완료:`);
   log(`  - 성공: ${successCount}/${PARALLEL_BROWSERS}`);
   log(`  - CAPTCHA: ${captchaCount}`);
+  log(`  - 차단: ${blockedCount}`);
   log(`  - 작업없음: ${noWorkCount}`);
+
+  // IP 차단 감지 시 쿨다운
+  if (blockedCount > 0) {
+    log(`\n[경고] IP 차단 감지! 60초 쿨다운 후 IP 로테이션...`, "warn");
+    await sleep(60000);  // 60초 대기
+    // IP 로테이션 강제 실행 (다음 배치에서)
+    return true;  // 작업 있음으로 처리해서 IP 로테이션 트리거
+  }
 
   // 작업이 모두 없으면 false 반환
   if (noWorkCount === PARALLEL_BROWSERS) {

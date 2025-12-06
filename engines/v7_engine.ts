@@ -11,6 +11,7 @@
 
 import type { Page, Browser } from "puppeteer-core";
 import type { RunContext, EngineResult, Product } from "../runner/types";
+import { ReceiptCaptchaSolverPRB } from "../captcha/ReceiptCaptchaSolverPRB";
 
 // ============ 유틸리티 함수 ============
 
@@ -26,6 +27,101 @@ function randomKeyDelay(): number {
 // 랜덤 범위
 function randomBetween(min: number, max: number): number {
   return min + Math.random() * (max - min);
+}
+
+// Dwell time 설정 (1~3초 랜덤)
+function getDwellTime(): number {
+  return randomBetween(1000, 3000);
+}
+
+// ============ 베지어 곡선 마우스 이동 ============
+
+interface Point {
+  x: number;
+  y: number;
+}
+
+/**
+ * 3차 베지어 곡선 계산
+ * t: 0~1 사이 값
+ */
+function cubicBezier(t: number, p0: Point, p1: Point, p2: Point, p3: Point): Point {
+  const t2 = t * t;
+  const t3 = t2 * t;
+  const mt = 1 - t;
+  const mt2 = mt * mt;
+  const mt3 = mt2 * mt;
+
+  return {
+    x: mt3 * p0.x + 3 * mt2 * t * p1.x + 3 * mt * t2 * p2.x + t3 * p3.x,
+    y: mt3 * p0.y + 3 * mt2 * t * p1.y + 3 * mt * t2 * p2.y + t3 * p3.y
+  };
+}
+
+/**
+ * 베지어 곡선을 따라 마우스 이동 경로 생성
+ * - 자연스러운 인간 마우스 움직임 시뮬레이션
+ * - 시작/끝 부분은 느리게, 중간은 빠르게 (easing)
+ */
+function generateBezierPath(start: Point, end: Point, steps: number): Point[] {
+  const path: Point[] = [];
+
+  // 제어점 생성 (자연스러운 곡선을 위해 랜덤 오프셋)
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const distance = Math.sqrt(dx * dx + dy * dy);
+
+  // 곡선의 굴곡 정도 (거리에 비례)
+  const curvature = Math.min(distance * 0.3, 100);
+
+  // 제어점 1: 시작점에서 약간 벗어남
+  const cp1: Point = {
+    x: start.x + dx * 0.25 + (Math.random() - 0.5) * curvature,
+    y: start.y + dy * 0.1 + (Math.random() - 0.5) * curvature
+  };
+
+  // 제어점 2: 끝점 근처
+  const cp2: Point = {
+    x: start.x + dx * 0.75 + (Math.random() - 0.5) * curvature,
+    y: start.y + dy * 0.9 + (Math.random() - 0.5) * curvature
+  };
+
+  // 경로 생성 (easing 적용 - 시작/끝 느리게)
+  for (let i = 0; i <= steps; i++) {
+    // easeInOutQuad로 t 변환
+    let t = i / steps;
+    t = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+
+    const point = cubicBezier(t, start, cp1, cp2, end);
+
+    // 미세한 떨림 추가 (인간적인 불안정성)
+    point.x += (Math.random() - 0.5) * 2;
+    point.y += (Math.random() - 0.5) * 2;
+
+    path.push(point);
+  }
+
+  return path;
+}
+
+/**
+ * 베지어 곡선으로 마우스 이동
+ */
+async function bezierMouseMove(page: Page, fromX: number, fromY: number, toX: number, toY: number): Promise<void> {
+  const start: Point = { x: fromX, y: fromY };
+  const end: Point = { x: toX, y: toY };
+
+  // 거리에 따라 스텝 수 조정 (20~40)
+  const distance = Math.sqrt(Math.pow(toX - fromX, 2) + Math.pow(toY - fromY, 2));
+  const steps = Math.floor(Math.min(40, Math.max(20, distance / 10)));
+
+  const path = generateBezierPath(start, end, steps);
+
+  for (const point of path) {
+    await page.mouse.move(point.x, point.y);
+    // 가변 딜레이 (2~8ms)
+    await sleep(randomBetween(2, 8));
+  }
 }
 
 // 상품명 단어 셔플
@@ -64,8 +160,9 @@ async function humanizedType(page: Page, selector: string, text: string, ctx: Ru
 }
 
 /**
- * 2) 마우스 클릭 (단순화)
- * - mouse.click() 사용 (down/up 분리 제거)
+ * 2) 마우스 클릭 (베지어 곡선)
+ * - 자연스러운 곡선 경로로 마우스 이동
+ * - 클릭 전 미세 딜레이
  */
 async function humanizedClick(page: Page, selector: string, ctx: RunContext): Promise<void> {
   ctx.log("human:click", { selector: selector.substring(0, 30) });
@@ -84,18 +181,25 @@ async function humanizedClick(page: Page, selector: string, ctx: RunContext): Pr
   const targetX = box.x + box.width / 2 + randomBetween(-5, 5);
   const targetY = box.y + box.height / 2 + randomBetween(-3, 3);
 
-  // 마우스 이동 후 클릭 (단순화)
-  await page.mouse.move(targetX, targetY, { steps: Math.floor(randomBetween(8, 12)) });
-  await sleep(randomBetween(30, 80));
+  // 현재 마우스 위치 가져오기 (없으면 랜덤 시작점)
+  const viewport = page.viewport();
+  const startX = viewport ? randomBetween(0, viewport.width) : 500;
+  const startY = viewport ? randomBetween(0, viewport.height * 0.3) : 200;
 
-  // mouse.click() 사용 (down/up 분리 제거)
-  await page.mouse.click(targetX, targetY, { delay: randomBetween(30, 60) });
+  // 베지어 곡선으로 마우스 이동
+  await bezierMouseMove(page, startX, startY, targetX, targetY);
+  await sleep(randomBetween(50, 120));
+
+  // 클릭 (down/up 분리로 더 자연스럽게)
+  await page.mouse.down();
+  await sleep(randomBetween(30, 80));
+  await page.mouse.up();
 }
 
 /**
- * 3) 요소 클릭 (단순화)
+ * 3) 요소 클릭 (베지어 곡선)
  * - 요소를 먼저 뷰포트에 스크롤
- * - mouse.click() 사용
+ * - 베지어 곡선으로 자연스럽게 이동 후 클릭
  */
 async function humanizedClickElement(page: Page, element: any, ctx: RunContext): Promise<void> {
   // 1. 먼저 요소를 뷰포트로 스크롤
@@ -123,12 +227,18 @@ async function humanizedClickElement(page: Page, element: any, ctx: RunContext):
 
   ctx.log("human:click:coords", { x: Math.round(targetX), y: Math.round(targetY) });
 
-  // 3. 마우스 이동 후 클릭 (단순화)
-  await page.mouse.move(targetX, targetY, { steps: Math.floor(randomBetween(8, 12)) });
-  await sleep(randomBetween(50, 100));
+  // 3. 현재 마우스 위치 추정 (화면 상단 영역에서 시작)
+  const startX = viewport ? randomBetween(viewport.width * 0.3, viewport.width * 0.7) : 500;
+  const startY = viewport ? randomBetween(100, viewport.height * 0.4) : 200;
 
-  // mouse.click() 사용 (down/up 분리 제거)
-  await page.mouse.click(targetX, targetY, { delay: randomBetween(30, 60) });
+  // 4. 베지어 곡선으로 마우스 이동
+  await bezierMouseMove(page, startX, startY, targetX, targetY);
+  await sleep(randomBetween(50, 120));
+
+  // 5. 클릭 (down/up 분리로 더 자연스럽게)
+  await page.mouse.down();
+  await sleep(randomBetween(40, 100));
+  await page.mouse.up();
 }
 
 // ============ 메인 엔진 ============
@@ -376,7 +486,41 @@ export async function runV7Engine(
 
     if (pageCheck.hasCaptcha) {
       ctx.log("verify:captcha", { detected: true });
-      result.captchaDetected = true;
+      
+      // Claude Vision으로 캡챠 해결 시도
+      try {
+        ctx.log("captcha:solving", { attempting: true });
+        const solver = new ReceiptCaptchaSolverPRB((msg) => ctx.log(msg));
+        const solved = await solver.solve(targetPage);
+        
+        if (solved) {
+          ctx.log("captcha:solved", { success: true });
+          // 캡챠 해결 후 페이지 다시 확인
+          await sleep(2000);
+          const recheckPage = await targetPage.evaluate(() => {
+            const bodyText = document.body.innerText || "";
+            return {
+              isProductPage: bodyText.includes("구매하기") || bodyText.includes("장바구니"),
+              stillCaptcha: bodyText.includes("보안 확인") || bodyText.includes("영수증")
+            };
+          });
+          
+          if (recheckPage.isProductPage && !recheckPage.stillCaptcha) {
+            ctx.log("verify:success", { afterCaptchaSolve: true });
+            result.productPageEntered = true;
+            result.success = true;
+            result.captchaDetected = false;  // 해결됨
+          } else {
+            result.captchaDetected = true;
+          }
+        } else {
+          ctx.log("captcha:failed", { solved: false });
+          result.captchaDetected = true;
+        }
+      } catch (e: any) {
+        ctx.log("captcha:error", { error: e.message });
+        result.captchaDetected = true;
+      }
     } else if (pageCheck.hasBlock) {
       result.error = "Blocked";
       ctx.log("verify:blocked", { blocked: true });
@@ -391,8 +535,13 @@ export async function runV7Engine(
 
     result.midMatched = pageCheck.midInUrl;
 
-    // 체류
-    await sleep(2000);
+    // 체류 시간 (환경변수: 30~60초)
+    if (result.productPageEntered) {
+      const dwellTime = getDwellTime();
+      ctx.log("dwell:start", { duration: Math.round(dwellTime / 1000) + "s" });
+      await sleep(dwellTime);
+      ctx.log("dwell:end", {});
+    }
 
     // 새 탭 닫기
     if (productPage && productPage !== page) {

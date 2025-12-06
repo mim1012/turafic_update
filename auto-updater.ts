@@ -70,7 +70,8 @@ class AutoUpdater {
       await this.checkAndUpdate();
     }, this.config.checkIntervalMs);
 
-    // ?�로?�스 종료 ?�들�?    this.setupGracefulShutdown();
+    // 프로세스 종료 핸들러
+    this.setupGracefulShutdown();
   }
 
   /**
@@ -95,7 +96,8 @@ class AutoUpdater {
     this.isUpdating = true;
 
     try {
-      // 1. ?�격 version.json 가?�오�?      const remoteVersionUrl = `${this.config.githubRawBase}/version.json`;
+      // 1. 원격 version.json 가져오기
+      const remoteVersionUrl = `${this.config.githubRawBase}/version.json`;
       const remoteVersion = await this.fetchJson<VersionInfo>(remoteVersionUrl);
 
       if (!remoteVersion) {
@@ -133,7 +135,8 @@ class AutoUpdater {
         await this.downloadFile(fileUrl, localPath);
       }
 
-      // 6. 로컬 버전 ?�보 ?�??      fs.writeFileSync(localVersionPath, JSON.stringify(remoteVersion, null, 2));
+      // 6. 로컬 버전 정보 저장
+      fs.writeFileSync(localVersionPath, JSON.stringify(remoteVersion, null, 2));
       this.localVersion = remoteVersion;
 
       console.log('[Updater] ???�데?�트 ?�료!\n');
@@ -220,7 +223,8 @@ class AutoUpdater {
       console.log(`[Updater] Runner 종료 (code: ${code})`);
       this.runnerProcess = null;
 
-      // 비정??종료 ???�시??      if (code !== 0) {
+      // 비정상 종료 시 재시도
+      if (code !== 0) {
         console.log('[Updater] 5�????�시??..');
         setTimeout(() => this.startRunner(), 5000);
       }
@@ -232,14 +236,15 @@ class AutoUpdater {
   }
 
   /**
-   * Runner ?�시??   */
+   * Runner 재시작
+   */
   private async restartRunner(): Promise<void> {
     if (this.runnerProcess) {
       console.log('[Updater] 기존 Runner 종료 �?..');
 
       return new Promise((resolve) => {
         this.runnerProcess!.once('exit', () => {
-          console.log('[Updater] Runner 종료??);
+          console.log('[Updater] Runner 종료됨');
           setTimeout(async () => {
             await this.startRunner();
             resolve();
@@ -262,7 +267,8 @@ class AutoUpdater {
   }
 
   /**
-   * HTTP(S) JSON 가?�오�?   */
+   * HTTP(S) JSON 가져오기
+   */
   private fetchJson<T>(url: string): Promise<T | null> {
     return new Promise((resolve) => {
       const client = url.startsWith('https') ? https : http;
