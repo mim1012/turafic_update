@@ -38,76 +38,47 @@ export async function getCurrentIP(): Promise<string> {
 // ============ 테더링 어댑터 감지 ============
 export async function getTetheringAdapter(): Promise<string | null> {
   try {
-    // 방법 1: wmic으로 설명(Description) 기반 검색
-    try {
-      const { stdout: wmicOut } = await execAsync(
-        'wmic nic where "NetEnabled=true" get Name,NetConnectionID /format:csv',
-        { encoding: "utf8" }
-      );
-
-      const tetheringKeywords = [
-        "Remote NDIS",
-        "USB 테더링",
-        "USB Tethering",
-        "Android USB",
-        "RNDIS",
-        "iPhone USB",
-        "Apple Mobile Device Ethernet",
-        "SAMSUNG Mobile",
-        "Mobile USB",
-      ];
-
-      const lines = wmicOut.split("\n").filter(l => l.trim());
-      for (const line of lines) {
-        const lowerLine = line.toLowerCase();
-        for (const keyword of tetheringKeywords) {
-          if (lowerLine.includes(keyword.toLowerCase())) {
-            // CSV 형식: Node,Name,NetConnectionID
-            const parts = line.split(",");
-            if (parts.length >= 3) {
-              const adapterName = parts[parts.length - 1].trim();
-              if (adapterName && adapterName !== "NetConnectionID") {
-                console.log(`[IPRotation] 테더링 어댑터 감지 (wmic): ${adapterName}`);
-                return adapterName;
-              }
-            }
+    // PowerShell로 테더링 어댑터 자동 감지 (유니코드 한글 지원)
+    const psCommand = `
+      $adapters = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' }
+      $tetheringKeywords = @('Remote NDIS', 'RNDIS', 'USB', 'Android', 'SAMSUNG', 'iPhone', 'Apple Mobile', 'Tethering')
+      foreach ($adapter in $adapters) {
+        foreach ($keyword in $tetheringKeywords) {
+          if ($adapter.InterfaceDescription -like "*$keyword*") {
+            Write-Output $adapter.Name
+            exit
           }
         }
       }
-    } catch {
-      // wmic 실패 시 netsh로 fallback
-    }
-
-    // 방법 2: netsh interface show interface (fallback)
-    const { stdout } = await execAsync("netsh interface show interface", { encoding: "utf8" });
-    const lines = stdout.split("\n");
-
-    // "이더넷 XX" 형태로 연결된 어댑터 중 기본 이더넷이 아닌 것 찾기
-    for (const line of lines) {
-      // 연결됨 상태인 어댑터만
-      if (line.includes("연결됨") || line.includes("Connected")) {
-        const parts = line.trim().split(/\s{2,}/);
-        if (parts.length >= 4) {
-          const adapterName = parts[parts.length - 1];
-          // VMware, Tailscale 등 제외
-          if (adapterName &&
-              !adapterName.includes("VMware") &&
-              !adapterName.includes("Tailscale") &&
-              !adapterName.includes("Loopback")) {
-            // 이더넷 XX 형태 (숫자가 큰 것이 대체로 테더링)
-            const match = adapterName.match(/이더넷\s*(\d+)/);
-            if (match && parseInt(match[1]) > 10) {
-              console.log(`[IPRotation] 테더링 어댑터 추정: ${adapterName}`);
-              return adapterName;
-            }
+      foreach ($adapter in $adapters) {
+        if ($adapter.Name -match '^이더넷\\s*(\\d+)$' -or $adapter.Name -match '^Ethernet\\s*(\\d+)$') {
+          $num = [int]$Matches[1]
+          if ($num -gt 1) {
+            Write-Output $adapter.Name
+            exit
           }
         }
       }
+    `.replace(/\n/g, ' ');
+
+    const { stdout } = await execAsync(
+      `powershell -NoProfile -Command "${psCommand}"`,
+      { encoding: "utf8", windowsHide: true }
+    );
+
+    const adapterName = stdout.trim();
+    if (adapterName) {
+      console.log(`[IPRotation] 테더링 어댑터 감지: ${adapterName}`);
+      return adapterName;
     }
 
+    const { stdout: listOut } = await execAsync(
+      `powershell -NoProfile -Command "Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object Name, InterfaceDescription | Format-Table -AutoSize"`,
+      { encoding: "utf8", windowsHide: true }
+    );
     console.log("[IPRotation] 테더링 어댑터를 찾을 수 없음");
     console.log("[IPRotation] 연결된 어댑터 목록:");
-    console.log(stdout);
+    console.log(listOut);
     return null;
   } catch (error: any) {
     console.error(`[IPRotation] 어댑터 감지 실패: ${error.message}`);
@@ -119,7 +90,11 @@ export async function getTetheringAdapter(): Promise<string | null> {
 export async function disableTethering(adapterName: string): Promise<void> {
   try {
     console.log(`[IPRotation] 테더링 비활성화: ${adapterName}`);
-    await execAsync(`netsh interface set interface "${adapterName}" disable`);
+    // PowerShell 사용 (유니코드 한글 인터페이스명 지원)
+    await execAsync(
+      `powershell -NoProfile -Command "Disable-NetAdapter -Name '${adapterName}' -Confirm:$false"`,
+      { encoding: "utf8", windowsHide: true }
+    );
   } catch (error: any) {
     // 이미 비활성화된 경우 무시
     if (!error.message.includes("already")) {
@@ -131,7 +106,11 @@ export async function disableTethering(adapterName: string): Promise<void> {
 export async function enableTethering(adapterName: string): Promise<void> {
   try {
     console.log(`[IPRotation] 테더링 활성화: ${adapterName}`);
-    await execAsync(`netsh interface set interface "${adapterName}" enable`);
+    // PowerShell 사용 (유니코드 한글 인터페이스명 지원)
+    await execAsync(
+      `powershell -NoProfile -Command "Enable-NetAdapter -Name '${adapterName}' -Confirm:$false"`,
+      { encoding: "utf8", windowsHide: true }
+    );
   } catch (error: any) {
     // 이미 활성화된 경우 무시
     if (!error.message.includes("already")) {
