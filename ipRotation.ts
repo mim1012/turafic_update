@@ -38,40 +38,30 @@ export async function getCurrentIP(): Promise<string> {
 // ============ 테더링 어댑터 감지 ============
 export async function getTetheringAdapter(): Promise<string | null> {
   try {
-    // PowerShell로 테더링 어댑터 자동 감지 (유니코드 한글 지원)
-    const psCommand = `
-      $adapters = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' }
-      $tetheringKeywords = @('Remote NDIS', 'RNDIS', 'USB', 'Android', 'SAMSUNG', 'iPhone', 'Apple Mobile', 'Tethering')
-      foreach ($adapter in $adapters) {
-        foreach ($keyword in $tetheringKeywords) {
-          if ($adapter.InterfaceDescription -like "*$keyword*") {
-            Write-Output $adapter.Name
-            exit
-          }
-        }
-      }
-      foreach ($adapter in $adapters) {
-        if ($adapter.Name -match '^이더넷\\s*(\\d+)$' -or $adapter.Name -match '^Ethernet\\s*(\\d+)$') {
-          $num = [int]$Matches[1]
-          if ($num -gt 1) {
-            Write-Output $adapter.Name
-            exit
-          }
-        }
-      }
-    `.replace(/\n/g, ' ');
-
-    const { stdout } = await execAsync(
-      `powershell -NoProfile -Command "${psCommand}"`,
+    // PowerShell 스크립트 파일 방식 대신 간단한 명령어 사용
+    // 방법 1: 테더링 키워드로 검색
+    const { stdout: keywordResult } = await execAsync(
+      `powershell -NoProfile -Command "Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and ($_.InterfaceDescription -like '*NDIS*' -or $_.InterfaceDescription -like '*USB*' -or $_.InterfaceDescription -like '*Android*' -or $_.InterfaceDescription -like '*SAMSUNG*' -or $_.InterfaceDescription -like '*Tethering*') } | Select-Object -First 1 -ExpandProperty Name"`,
       { encoding: "utf8", windowsHide: true }
     );
 
-    const adapterName = stdout.trim();
-    if (adapterName) {
-      console.log(`[IPRotation] 테더링 어댑터 감지: ${adapterName}`);
-      return adapterName;
+    if (keywordResult.trim()) {
+      console.log(`[IPRotation] 테더링 어댑터 감지: ${keywordResult.trim()}`);
+      return keywordResult.trim();
     }
 
+    // 방법 2: 이더넷 N (N > 1) 패턴 검색
+    const { stdout: ethernetResult } = await execAsync(
+      `powershell -NoProfile -Command "Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and $_.Name -match '^(이더넷|Ethernet)\\s*[2-9]|^(이더넷|Ethernet)\\s*[1-9][0-9]+' } | Select-Object -First 1 -ExpandProperty Name"`,
+      { encoding: "utf8", windowsHide: true }
+    );
+
+    if (ethernetResult.trim()) {
+      console.log(`[IPRotation] 테더링 어댑터 감지: ${ethernetResult.trim()}`);
+      return ethernetResult.trim();
+    }
+
+    // Fallback: 연결된 어댑터 목록 출력
     const { stdout: listOut } = await execAsync(
       `powershell -NoProfile -Command "Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object Name, InterfaceDescription | Format-Table -AutoSize"`,
       { encoding: "utf8", windowsHide: true }
